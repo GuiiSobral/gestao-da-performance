@@ -1,0 +1,752 @@
+// Interface da Gestão da Performance (mesmas telas do protótipo aprovado), lendo e gravando nas Listas do SharePoint.
+import { AREAS, hojeISO } from './store.js';
+
+let st = null;          // Store
+let ctx = {};           // { logout, listUrl }
+let HOJE = hojeISO();
+let LIM7 = null;          // definido a cada render (HOJE + 7 dias)
+
+const S = {
+  cli: null, fa: { q: '', sit: 'abertas', resp: '', area: '', tipo: '' }, fd: { tipo: 'todas', st: 'abertas' },
+  demOpen: new Set(), step: 0, pessoaSemana: null, drawer: null, modal: null, busy: false, reloading: false
+};
+
+/* ---------- utilidades ---------- */
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const fmt = i => (i ? i.slice(8, 10) + '/' + i.slice(5, 7) : '—');
+const fmtF = i => (i ? fmt(i) + '/' + i.slice(0, 4) : '—');
+const dt = i => new Date(i + 'T12:00:00');
+function addDays(i, n) { const d = dt(i); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10); }
+const diff = (a, b) => Math.round((dt(a) - dt(b)) / 86400000);
+const plural = (n, s, p) => (n === 1 ? s : p);
+const aberta = a => a.status === 'Em andamento' || a.status === 'Não iniciada';
+const FAROL = { bad: 'Farol vermelho', warn: 'Farol amarelo', good: 'Farol verde', off: 'Encerrada' };
+const SEV = { bad: 0, warn: 1, good: 2, off: 3 };
+const store = () => st;
+const cliNome = code => { const c = st.cliente(code); return c ? c.nome : code; };
+const acoesC = cli => st.acoes.filter(a => a.cli === cli);
+const demandasC = cli => st.demandas.filter(d => d.cli === cli);
+const frentesC = cli => st.frentes.filter(f => f.cli === cli);
+const clientesOrd = () => st.clientes.slice().sort((a, b) => st.temDados(b.id) - st.temDados(a.id) || a.nome.localeCompare(b.nome));
+const solveFez = a => a.status === 'Cancelada' && /mesmo fez/i.test(`${a.como} ${a.motivoCancel}`);
+
+function situacao(a) {
+  if (a.status === 'Concluída') return { k: 'ok', t: 'Concluída', o: 5 };
+  if (a.status === 'Cancelada') return { k: 'off', t: 'Cancelada', o: 6 };
+  if (!a.prazo) return { k: 'warn', t: 'Sem prazo', o: 3, line: true };
+  if (a.prazo < HOJE) { const d = diff(HOJE, a.prazo); return { k: 'bad', t: `Vencida há ${d} d`, o: 1, dias: d }; }
+  if (a.prazo <= LIM7) return { k: 'warn', t: `Vence ${fmt(a.prazo)}`, o: 2 };
+  return { k: 'good', t: `No prazo · ${fmt(a.prazo)}`, o: 4 };
+}
+const pill = s => `<span class="pill ${s.k}${s.line ? ' line' : ''}">${esc(s.t)}</span>`;
+const dot = (k, t) => `<span class="dot ${k}" role="img" aria-label="${esc(t || '')}" title="${esc(t || '')}"></span>`;
+
+function respHtml(code, apoio) {
+  if (!code) return '<span class="tag bad">sem responsável</span>';
+  const p = st.pessoa(code);
+  let h = esc(st.nome(code));
+  if (p && !p.nominal) h += ' <span class="tag bad">sem dono nominal</span>';
+  else if (p && p.empresa === 'Solve') h += ' <span class="tag solve">Solve</span>';
+  if (apoio) h += `<span class="sub">apoio: ${esc(apoio)}</span>`;
+  return h;
+}
+
+function M(list) {
+  const ab = list.filter(aberta);
+  return {
+    total: list.length, ab: ab.length,
+    venc: ab.filter(a => a.prazo && a.prazo < HOJE).length,
+    v7: ab.filter(a => a.prazo && a.prazo >= HOJE && a.prazo <= LIM7).length,
+    semp: ab.filter(a => !a.prazo).length,
+    conc: list.filter(a => a.status === 'Concluída').length,
+    canc: list.filter(a => a.status === 'Cancelada').length,
+    semDono: ab.filter(a => !st.nominal(a.resp)).length,
+    repVenc: ab.filter(a => a.reprogramacoes.length && a.prazo && a.prazo < HOJE).length
+  };
+}
+
+function infoDem(d) {
+  const ac = st.acoesDe(d.id), ab = ac.filter(aberta);
+  const venc = ab.filter(a => a.prazo && a.prazo < HOJE).length;
+  const semp = ab.filter(a => !a.prazo).length;
+  const v7 = ab.filter(a => a.prazo && a.prazo >= HOJE && a.prazo <= LIM7).length;
+  const conc = ac.filter(a => a.status === 'Concluída').length;
+  let status;
+  if (d.encerrada) status = ac.length && ac.every(a => a.status === 'Cancelada') ? 'Cancelada' : 'Concluída';
+  else if (ab.length) status = 'Em andamento';
+  else if (ac.length) status = 'Validar encerramento';
+  else status = 'Sem plano de ação';
+  const validar = status === 'Validar encerramento';
+  const farol = status === 'Sem plano de ação' ? 'bad' : venc ? 'bad' : (semp || v7 || validar) ? 'warn' : ab.length ? 'good' : 'off';
+  return { ac, ab, venc, semp, v7, conc, status, farol, validar, aberta: !d.encerrada };
+}
+
+function infoFr(f) {
+  const dems = st.demandas.filter(d => d.frente === f.id);
+  const ac = dems.flatMap(d => st.acoesDe(d.id)), ab = ac.filter(aberta);
+  const val = ac.filter(a => a.status !== 'Cancelada'), conc = ac.filter(a => a.status === 'Concluída').length;
+  const prog = val.length ? Math.round(conc * 100 / val.length) : 0;
+  const status = f.encerrada ? 'Concluída' : ab.length ? 'Em andamento' : 'Sem plano ativo';
+  const atrasada = status === 'Em andamento' && f.fim && f.fim < HOJE;
+  const venc = ab.filter(a => a.prazo && a.prazo < HOJE).length;
+  const farol = status === 'Sem plano ativo' ? 'bad' : status === 'Concluída' ? 'off' : (atrasada || venc) ? 'bad' : ab.some(a => !a.prazo) ? 'warn' : 'good';
+  return { dems, ac, ab, prog, status, atrasada, venc, farol, conc, val: val.length };
+}
+
+function sortAcoes(list) {
+  return list.slice().sort((a, b) => {
+    const sa = situacao(a), sb = situacao(b);
+    if (sa.o !== sb.o) return sa.o - sb.o;
+    if (sa.o === 1) return sb.dias - sa.dias;
+    return (a.prazo || '9999').localeCompare(b.prazo || '9999') || a.id.localeCompare(b.id, 'pt', { numeric: true });
+  });
+}
+
+let toastT;
+function toast(msg, erro) {
+  const t = $('#toast');
+  t.textContent = msg; t.hidden = false; t.classList.toggle('err', !!erro);
+  clearTimeout(toastT); toastT = setTimeout(() => { t.hidden = true; }, erro ? 7000 : 2800);
+}
+async function copiar(text, el) {
+  try { await navigator.clipboard.writeText(text); toast('Texto copiado'); }
+  catch (e) { if (el) { el.focus(); el.select(); } toast('Selecionei o texto: use Ctrl+C para copiar'); }
+}
+
+/* ---------- casca ---------- */
+const ROUTES = {
+  carteira: { t: 'Carteira', r: renderCarteira, global: true },
+  visao: { t: 'Visão geral', r: renderVisao },
+  demandas: { t: 'Demandas', r: renderDemandas },
+  acoes: { t: 'Ações', r: renderAcoes },
+  forum: { t: 'Fórum de gestão', r: renderForum },
+  semana: { t: 'Minha semana', r: renderSemana, global: true }
+};
+const route = () => { const h = (location.hash || '').replace('#', ''); return ROUTES[h] ? h : 'visao'; };
+
+function shell() {
+  $('#root').innerHTML = `
+  <div class="app">
+    <aside class="rail">
+      <div class="brand"><b>Gestão da Performance</b><span>Solve Group</span></div>
+      <nav class="nav" id="nav" aria-label="Seções">
+        <a href="#carteira" data-r="carteira">Carteira</a>
+        <div class="grp label">Cliente</div>
+        <label class="clisel"><span class="sr">Cliente</span><select id="selCli"></select></label>
+        <a href="#visao" data-r="visao">Visão geral</a>
+        <a href="#demandas" data-r="demandas">Demandas</a>
+        <a href="#acoes" data-r="acoes">Ações <span class="cnt" id="cntAb"></span></a>
+        <a href="#forum" data-r="forum">Fórum</a>
+        <div class="grp label">Pessoas</div>
+        <a href="#semana" data-r="semana">Minha semana</a>
+      </nav>
+      <div class="railnote" id="railnote"></div>
+    </aside>
+    <main>
+      <div class="top">
+        <div class="ttl"><div class="label" id="eyebrow"></div><h1 id="ttl"></h1></div>
+        <div class="chips"><button class="btn" data-do="recarregar" id="btnSync" title="Ler de novo as listas do SharePoint">Atualizar</button><button class="btn primary" data-do="capturar">+ Nova ação</button></div>
+      </div>
+      <div id="view" class="view"></div>
+    </main>
+  </div>`;
+}
+
+function render() {
+  HOJE = hojeISO(); LIM7 = addDays(HOJE, 7);
+  const r = route(), R = ROUTES[r];
+  const comDados = st.clientes.filter(c => st.temDados(c.id));
+  if (!S.cli || !st.cliente(S.cli)) S.cli = (comDados[0] || st.clientes[0] || {}).id || null;
+  const sel = $('#selCli');
+  sel.innerHTML = clientesOrd().map(c => `<option value="${esc(c.id)}"${c.id === S.cli ? ' selected' : ''}>${esc(c.nome)}${st.temDados(c.id) ? '' : ' (a migrar)'}</option>`).join('');
+  $('#eyebrow').textContent = R.global ? 'Solve Group' : cliNome(S.cli);
+  $('#ttl').textContent = R.t;
+  document.querySelectorAll('#nav a').forEach(a => { if (a.dataset.r === r) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); });
+  $('#cntAb').textContent = S.cli ? M(acoesC(S.cli)).ab : '';
+  const eu = st.eu();
+  const hora = st.loadedAt ? st.loadedAt.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '—';
+  $('#railnote').innerHTML = `<b>${esc(st.user.name || '')}</b>${eu ? '' : '<span class="small">sem cadastro em Pessoas</span>'}
+    <span>Dados do SharePoint lidos às ${hora}</span>
+    <span class="row-actions">${ctx.listUrl ? `<a class="btn sm ghost" href="${esc(ctx.listUrl)}" target="_blank" rel="noopener">Listas</a>` : ''}${ctx.logout ? '<button class="btn sm ghost" data-do="sair">Sair</button>' : ''}</span>`;
+  const focused = document.activeElement && document.activeElement.id;
+  const pos = focused === 'fq' ? document.activeElement.selectionStart : null;
+  $('#view').innerHTML = R.r();
+  if (focused === 'fq') { const i = $('#fq'); if (i) { i.focus(); i.setSelectionRange(pos, pos); } }
+  renderLayer();
+}
+function go(r) { if (location.hash === '#' + r) render(); else location.hash = r; }
+
+/* ---------- Carteira ---------- */
+function renderCarteira() {
+  const cart = clientesOrd().filter(c => c.situacao !== 'Encerrado');
+  const todas = st.acoes.filter(a => cart.some(c => c.id === a.cli));
+  const mt = M(todas);
+  const rows = cart.map(c => {
+    if (!st.temDados(c.id)) return `<tr class="dim"><td><span class="sem" aria-hidden="true"><i></i><i></i><i></i></span></td>
+      <td><b>${esc(c.nome)}</b><span class="sub mono">${esc(c.arquivo || 'Planilha ainda não mapeada')}</span></td><td colspan="5"><span class="pill ok">Aguardando migração</span></td></tr>`;
+    const m = M(acoesC(c.id));
+    const sp = semPlano(c.id).length;
+    const fr = m.venc || sp ? 'bad' : (m.semp || m.v7) ? 'warn' : 'good';
+    return `<tr class="click" data-cli-go="${esc(c.id)}"><td><span class="sem" role="img" aria-label="${FAROL[fr]}"><i class="${fr === 'bad' ? 'on bad' : ''}"></i><i class="${fr === 'warn' ? 'on warn' : ''}"></i><i class="${fr === 'good' ? 'on good' : ''}"></i></span></td>
+      <td><b>${esc(c.nome)}</b><span class="sub">${c.consultor ? 'Consultor: ' + esc(st.nome(c.consultor)) : 'Sem consultor definido'}${c.supervisor ? ' · supervisão: ' + esc(st.nome(c.supervisor)) : ''}</span></td>
+      <td class="num">${m.ab}</td><td class="num" style="color:var(--bad);font-weight:600">${m.venc}</td><td class="num">${m.semp}</td><td class="num">${m.semDono}</td><td class="num">${sp}</td></tr>`;
+  }).join('');
+  const exc = cart.filter(c => st.temDados(c.id)).flatMap(c => excecoes(c.id).map(e => ({ ...e, cli: c.id })));
+  return `
+  <div class="strip" style="grid-template-columns:repeat(4,minmax(0,1fr))">
+    <button data-go="carteira"><span class="v">${cart.length}</span><span class="k">Clientes na carteira</span></button>
+    <button data-go="carteira"><span class="v">${cart.filter(c => st.temDados(c.id)).length}<span class="muted" style="font-size:1rem"> / ${cart.length}</span></span><span class="k">Na nova base</span></button>
+    <button data-go="carteira"><span class="v">${mt.ab}</span><span class="k">Ações abertas</span></button>
+    <button class="bad" data-go="carteira"><span class="v">${mt.venc}</span><span class="k">Vencidas</span></button>
+  </div>
+  <div class="tablewrap"><table>
+    <thead><tr><th style="width:1%">Farol</th><th>Cliente</th><th>Abertas</th><th>Vencidas</th><th>Sem prazo</th><th>Sem dono</th><th>Sem plano</th></tr></thead>
+    <tbody>${rows}</tbody></table></div>
+  <section class="panel">
+    <header><h2>Exceções que pedem decisão</h2><span class="small muted">gestão por exceção: só o que saiu da regra</span></header>
+    ${exc.length ? `<div class="list">${exc.map(e => `<div class="li">${dot(e.k, FAROL[e.k])}<div class="body"><button class="linkbtn" data-cli-set="${esc(e.cli)}" ${e.attr}>${esc(e.t)}</button><div class="meta">${esc(cliNome(e.cli))} · ${esc(e.m)}</div></div></div>`).join('')}</div>` : '<div class="empty">Nenhuma exceção na carteira.</div>'}
+  </section>`;
+}
+function semPlano(cli) {
+  return [...demandasC(cli).filter(d => infoDem(d).status === 'Sem plano de ação'), ...frentesC(cli).filter(f => infoFr(f).status === 'Sem plano ativo')];
+}
+function excecoes(cli) {
+  const out = [];
+  const ab = acoesC(cli).filter(aberta);
+  const velhas = ab.filter(a => a.prazo && diff(HOJE, a.prazo) > 90);
+  if (velhas.length) out.push({ k: 'bad', t: `${velhas.length} ${plural(velhas.length, 'ação vencida', 'ações vencidas')} há mais de 90 dias`, m: velhas.map(a => a.acao).slice(0, 3).join(' · '), attr: 'data-sig="vencidas"' });
+  const rep = ab.filter(a => a.reprogramacoes.length && a.prazo && a.prazo < HOJE);
+  if (rep.length) out.push({ k: 'bad', t: `${rep.length} ${plural(rep.length, 'ação repactuada venceu', 'ações repactuadas venceram')} de novo`, m: 'levar ao fórum', attr: 'data-sig="repact"' });
+  demandasC(cli).filter(d => infoDem(d).status === 'Sem plano de ação').forEach(d => out.push({ k: 'bad', t: `Sem plano de ação: ${d.titulo}`, m: d.resp ? 'responsável ' + st.nome(d.resp) : 'sem responsável', attr: `data-dem-go="${esc(d.id)}"` }));
+  frentesC(cli).filter(f => infoFr(f).status === 'Sem plano ativo').forEach(f => out.push({ k: 'bad', t: `Frente sem plano ativo: ${f.nome}`, m: f.nota || 'nenhuma ação aberta', attr: 'data-go="visao"' }));
+  const val = demandasC(cli).filter(d => infoDem(d).validar);
+  if (val.length) out.push({ k: 'warn', t: `${val.length} ${plural(val.length, 'demanda com todas as ações fechadas', 'demandas com todas as ações fechadas')}`, m: 'validar o encerramento', attr: 'data-go="demandas" data-fd="validar"' });
+  const sd = ab.filter(a => !st.nominal(a.resp));
+  if (sd.length) out.push({ k: 'warn', t: `${sd.length} ${plural(sd.length, 'ação aberta', 'ações abertas')} sem dono nominal`, m: 'responsável registrado como empresa ou setor', attr: 'data-sig="semdono"' });
+  return out;
+}
+
+function semDados() {
+  const c = st.cliente(S.cli);
+  return `<div class="empty"><b>${esc(c ? c.nome : 'Cliente')}</b> ainda não foi migrado para a nova base.${c && c.arquivo ? `<br><span class="small mono">${esc(c.arquivo)}</span>` : ''}<br><br><button class="btn primary" data-do="capturar">+ Registrar a primeira ação</button></div>`;
+}
+
+/* ---------- Visão geral ---------- */
+function renderVisao() {
+  if (!S.cli) return '<div class="empty">Nenhum cliente cadastrado em GP_Clientes.</div>';
+  if (!st.temDados(S.cli)) return semDados();
+  const lista = acoesC(S.cli), m = M(lista);
+  const ab = lista.filter(aberta), venc = ab.filter(a => a.prazo && a.prazo < HOJE);
+  const faixas = [['1 a 30 dias', 1, 30], ['31 a 60 dias', 31, 60], ['61 a 90 dias', 61, 90], ['mais de 90 dias', 91, 1e9]]
+    .map(([n, a, b]) => [n, venc.filter(x => { const d = diff(HOJE, x.prazo); return d >= a && d <= b; }).length]);
+  const fmax = Math.max(1, ...faixas.map(f => f[1]));
+  const carga = {};
+  ab.forEach(a => { const k = a.resp || '—'; carga[k] = carga[k] || { t: 0, v: 0 }; carga[k].t++; if (a.prazo && a.prazo < HOJE) carga[k].v++; });
+  const cg = Object.entries(carga).sort((x, y) => y[1].t - x[1].t || y[1].v - x[1].v).slice(0, 8);
+  const cmax = Math.max(1, ...cg.map(c => c[1].t));
+  const qcs = demandasC(S.cli).filter(d => d.tipo === 'Questão crítica').map(d => ({ d, i: infoDem(d) })).filter(x => x.i.aberta)
+    .sort((a, b) => (a.d.prioridade || 99) - (b.d.prioridade || 99) || SEV[a.i.farol] - SEV[b.i.farol]);
+  const frs = frentesC(S.cli).map(f => ({ f, i: infoFr(f) })).sort((a, b) => SEV[a.i.farol] - SEV[b.i.farol] || a.f.id.localeCompare(b.f.id, 'pt', { numeric: true }));
+  const sp = semPlano(S.cli).length, nval = demandasC(S.cli).filter(d => infoDem(d).validar).length, pf = lista.filter(solveFez).length;
+  return `
+  <div><p class="lede">${m.ab ? `<em>${m.venc}</em> das ${m.ab} ações abertas estão vencidas.` : 'Nenhuma ação aberta.'}</p>
+  <p class="lede-sub">O atraso é calculado pelo prazo de cada ação, nunca digitado. Clique em qualquer número para ver as ações.</p></div>
+  <div class="strip">
+    <button data-sig="abertas"><span class="v">${m.ab}</span><span class="k">Abertas</span></button>
+    <button class="bad" data-sig="vencidas"><span class="v">${m.venc}</span><span class="k">Vencidas</span></button>
+    <button class="warn" data-sig="v7"><span class="v">${m.v7}</span><span class="k">Vencem em 7 dias</span></button>
+    <button class="warn" data-sig="semprazo"><span class="v">${m.semp}</span><span class="k">Sem prazo</span></button>
+    <button class="${m.semDono ? 'warn' : ''}" data-sig="semdono"><span class="v">${m.semDono}</span><span class="k">Sem dono nominal</span></button>
+    <button data-sig="concluidas"><span class="v">${m.conc}</span><span class="k">Concluídas</span></button>
+  </div>
+  <div class="grid2">
+    <section class="panel"><header><h2>Há quanto tempo as ações estão vencidas</h2><span class="small muted">${m.venc} ${plural(m.venc, 'vencida', 'vencidas')}</span></header>
+      <div class="bars">${faixas.map(([n, v]) => `<div class="bar"><span class="nm">${n}</span><span class="track"><span class="fill" style="width:${v / fmax * 100}%"></span></span><span class="n">${v}</span></div>`).join('')}</div>
+    </section>
+    <section class="panel"><header><h2>Carga por responsável</h2><span class="small muted">ações abertas</span></header>
+      ${cg.length ? `<div class="bars">${cg.map(([n, c]) => `<div class="bar"><button class="linkbtn nm" data-resp="${esc(n)}">${esc(st.nome(n))}</button><span class="track"><span class="fill" style="width:${c.v / cmax * 100}%"></span><span class="fill rest" style="width:${(c.t - c.v) / cmax * 100}%"></span></span><span class="n">${c.t}</span></div>`).join('')}</div>
+      <div class="legend"><span><i style="background:var(--bad)"></i>vencidas</span><span><i style="background:var(--off);opacity:.55"></i>no prazo ou sem prazo</span></div>` : '<div class="empty small">Nenhuma ação aberta.</div>'}
+    </section>
+  </div>
+  <div class="grid3">
+    <section class="panel"><header><h2>Questões críticas</h2><span class="small muted">por prioridade definida no fórum</span></header>
+      ${qcs.length ? `<div class="list">${qcs.map(({ d, i }) => `<div class="li">${dot(i.farol, FAROL[i.farol])}<div class="body">
+        <button class="linkbtn" data-dem-go="${esc(d.id)}">${d.prioridade ? `<span class="prio">P${d.prioridade}</span> ` : ''}${esc(d.titulo)}</button>
+        <div class="meta"><span>${d.resp ? esc(st.nome(d.resp)) : 'sem responsável'}</span><span>${i.ab.length} ${plural(i.ab.length, 'ação aberta', 'ações abertas')}</span>${i.venc ? `<span style="color:var(--bad)">${i.venc} ${plural(i.venc, 'vencida', 'vencidas')}</span>` : ''}${i.status === 'Sem plano de ação' ? '<span class="pill bad">sem plano de ação</span>' : ''}${i.validar ? '<span class="pill acc">validar encerramento</span>' : ''}</div></div></div>`).join('')}</div>` : '<div class="empty small">Nenhuma questão crítica aberta.</div>'}
+    </section>
+    <div class="stack">
+      <section class="panel"><header><h2>Sinais de gestão</h2></header>
+        <div class="signals">
+          <button class="signal" data-sig="repact"><b style="color:var(--bad)">${m.repVenc}</b><span>${plural(m.repVenc, 'ação repactuada venceu de novo', 'ações repactuadas venceram de novo')}</span></button>
+          ${pf ? `<button class="signal" data-sig="solvefez"><b>${pf}</b><span>${plural(pf, 'ação cancelada porque', 'ações canceladas porque')} a Solve executou a tarefa do cliente</span></button>` : ''}
+          <button class="signal" data-go="demandas" data-fd="semplano"><b style="color:var(--bad)">${sp}</b><span>demandas e frentes sem plano de ação ativo</span></button>
+          <button class="signal" data-go="demandas" data-fd="validar"><b>${nval}</b><span>${plural(nval, 'demanda com todas as ações fechadas, para validar o encerramento', 'demandas com todas as ações fechadas, para validar o encerramento')}</span></button>
+        </div>
+      </section>
+      ${indicadoresPanel()}
+    </div>
+  </div>
+  ${frs.length ? `<section class="stack"><header class="sechead"><h2>Frentes (projetos estratégicos)</h2><span class="small muted">avanço = ações concluídas sobre ações não canceladas</span></header><div class="tablewrap"><table>
+    <thead><tr><th style="width:1%"></th><th>Frente</th><th>Dono</th><th>Fim</th><th>Avanço</th><th>Status</th></tr></thead>
+    <tbody>${frs.map(({ f, i }) => `<tr><td>${dot(i.farol, FAROL[i.farol])}</td><td><b>${esc(f.nome)}</b><span class="sub">${esc(f.area)}${f.nota ? ' · ' + esc(f.nota) : ''}</span></td>
+      <td class="c-nw">${respHtml(f.dono)}</td><td class="num c-nw">${f.fim ? fmt(f.fim) : '—'}</td>
+      <td><div class="prog"><span class="t"><span class="f" style="width:${i.prog}%"></span></span><span class="n">${i.ac.length ? i.prog + '%' : '—'}</span></div><span class="sub">${i.conc} de ${i.val} ações</span></td>
+      <td class="c-nw">${i.status === 'Em andamento' && i.atrasada ? '<span class="pill bad">Atrasada</span>' : i.status === 'Sem plano ativo' ? '<span class="pill bad line">Sem plano ativo</span>' : i.status === 'Concluída' ? '<span class="pill ok">Concluída</span>' : '<span class="pill good">Em andamento</span>'}</td></tr>`).join('')}</tbody></table></div></section>` : ''}`;
+}
+
+function indicadoresPanel() {
+  const inds = st.indicadores.filter(x => x.cli === S.cli);
+  if (!inds.length) return '';
+  const ult = id => st.medicoes.filter(m => m.indicador === id).sort((a, b) => (b.mes || '').localeCompare(a.mes || ''))[0];
+  const temMed = inds.some(x => ult(x.id));
+  const fr = x => {
+    if (x.situacao === 'Cancelado') return ['off', 'cancelado'];
+    const m = ult(x.id);
+    if (!m || m.meta === null || m.realizado === null) return ['warn', 'sem meta e realizado'];
+    const ok = x.polaridade === 'Menor é melhor' ? m.realizado <= m.meta : m.realizado >= m.meta;
+    return [ok ? 'good' : 'bad', `${fmt(m.mes).slice(3)}: ${m.realizado} / meta ${m.meta}`];
+  };
+  return `<section class="panel"><header><h2>Indicadores</h2><span class="small muted">meta x realizado</span></header>
+    <div class="kv" style="margin-bottom:10px">${inds.map(x => { const [k, t] = fr(x); return `<span title="${esc(t)}">${dot(k, t)} ${esc(x.area || x.nome)}</span>`; }).join('')}</div>
+    ${temMed ? '' : '<div class="empty small">Nenhuma medição lançada ainda. Com meta e realizado por mês, cada indicador fora da meta vira uma demanda.</div>'}
+  </section>`;
+}
+
+/* ---------- Demandas ---------- */
+function renderDemandas() {
+  if (!st.temDados(S.cli)) return semDados();
+  const f = S.fd;
+  let list = demandasC(S.cli).map(d => ({ d, i: infoDem(d) }));
+  if (f.tipo !== 'todas') list = list.filter(x => x.d.tipo === f.tipo);
+  if (f.st === 'abertas') list = list.filter(x => x.i.aberta);
+  if (f.st === 'semplano') list = list.filter(x => x.i.status === 'Sem plano de ação');
+  if (f.st === 'validar') list = list.filter(x => x.i.validar);
+  if (f.st === 'encerradas') list = list.filter(x => !x.i.aberta);
+  list.sort((a, b) => SEV[a.i.farol] - SEV[b.i.farol] || (a.d.prioridade || 99) - (b.d.prioridade || 99) || b.i.venc - a.i.venc || a.d.titulo.localeCompare(b.d.titulo));
+  const tipos = [...new Set(demandasC(S.cli).map(d => d.tipo))];
+  const seg = (k, v, opts) => `<div class="seg" role="group">${opts.map(([val, lab]) => `<button data-fd-${k}="${esc(val)}" aria-pressed="${v === val}">${lab}</button>`).join('')}</div>`;
+  return `
+  <p class="lede-sub" style="margin:0">Uma demanda é o que entra na gestão: pendência, questão crítica, entrega de uma frente, deliberação ou desvio de indicador. O status dela vem das ações; o encerramento é confirmado aqui.</p>
+  <div class="toolbar">
+    ${seg('tipo', f.tipo, [['todas', 'Todas'], ...['Questão crítica', 'Pendência', 'Entrega de frente', 'Deliberação do fórum', 'Desvio de indicador'].filter(t => tipos.includes(t)).map(t => [t, t === 'Questão crítica' ? 'Questões críticas' : t === 'Pendência' ? 'Pendências' : t === 'Entrega de frente' ? 'Entregas de frente' : t])])}
+    ${seg('st', f.st, [['abertas', 'Abertas'], ['semplano', 'Sem plano'], ['validar', 'Validar encerramento'], ['encerradas', 'Encerradas'], ['todas', 'Todas']])}
+    <span class="small muted">${list.length} ${plural(list.length, 'demanda', 'demandas')}</span>
+  </div>
+  <div class="tablewrap" style="overflow:visible">${list.length ? list.map(({ d, i }) => demRow(d, i)).join('') : '<div class="empty" style="margin:16px">Nenhuma demanda com esses filtros.</div>'}</div>`;
+}
+function demRow(d, i) {
+  const open = S.demOpen.has(d.id);
+  const fr = d.frente ? st.frente(d.frente) : null;
+  const naoCanc = i.ac.length - i.ac.filter(a => a.status === 'Cancelada').length;
+  const stPill = i.status === 'Sem plano de ação' ? '<span class="pill bad">Sem plano de ação</span>'
+    : i.status === 'Em andamento' ? '<span class="pill good">Em andamento</span>'
+    : i.validar ? '<span class="pill acc">Validar encerramento</span>'
+    : `<span class="pill ${i.status === 'Cancelada' ? 'off' : 'ok'}">${i.status}</span>`;
+  const notas = [d.statusOriginal ? `No arquivo de origem: ${d.statusOriginal}` : '', ...String(d.nota || '').split('\n')].filter(Boolean);
+  return `<div class="dem" id="dem-${esc(d.id)}">
+    <button data-dem="${esc(d.id)}" aria-expanded="${open}">${dot(i.farol, FAROL[i.farol])}
+      <span style="min-width:0"><span class="t">${d.prioridade ? `<span class="prio">P${d.prioridade}</span> ` : ''}${esc(d.titulo)}</span>
+        <span class="m"><span class="tag">${esc(d.tipo)}</span>${fr ? `<span>${esc(fr.nome)}</span>` : ''}<span>${d.resp ? esc(st.nome(d.resp)) : '<b style="color:var(--bad)">sem responsável</b>'}</span>
+        ${i.ac.length ? `<span>${i.conc}/${naoCanc} concluídas</span>` : ''}${i.venc ? `<span style="color:var(--bad);font-weight:600">${i.venc} ${plural(i.venc, 'vencida', 'vencidas')}</span>` : ''}${i.semp ? `<span style="color:var(--warn)">${i.semp} sem prazo</span>` : ''}
+        ${d.nota ? '<span class="pill warn">nota da migração</span>' : ''}</span></span>
+      <span class="r">${stPill}</span>
+    </button>
+    ${open ? `<div class="open">
+      ${notas.length ? `<div class="note"><b>O que a migração encontrou</b><ul>${notas.map(x => `<li>${esc(x)}</li>`).join('')}</ul></div>` : ''}
+      <div class="small muted"><span class="mono">${esc(d.id)}</span>${d.origem ? ' · origem: ' + esc(d.origem) : ''}${d.prazo ? ` · prazo da demanda: ${fmt(d.prazo)}` : ''}${d.encerrada && d.dataEnc ? ` · encerrada em ${fmtF(d.dataEnc)}` : ''}</div>
+      ${i.ac.length ? `<div style="overflow-x:auto"><table class="mini"><tbody>${sortAcoes(i.ac).map(a => `<tr data-acao="${esc(a.id)}"><td class="c-id">${esc(a.id)}</td><td>${esc(a.acao)}</td><td class="c-nw">${esc(st.nome(a.resp) || '—')}</td><td class="c-nw">${pill(situacao(a))}</td></tr>`).join('')}</tbody></table></div>` : ''}
+      <div class="row-actions">${i.aberta ? `<button class="btn sm" data-do="capturar" data-dem-pre="${esc(d.id)}">+ ${i.ac.length ? 'Nova ação nesta demanda' : 'Criar a primeira ação'}</button>` : ''}
+        ${i.validar ? `<button class="btn sm primary" data-do="encerrarDem" data-id="${esc(d.id)}">Confirmar encerramento</button>` : ''}</div>
+    </div>` : ''}
+  </div>`;
+}
+
+/* ---------- Ações ---------- */
+const SIT = [['abertas', 'Abertas'], ['vencidas', 'Vencidas'], ['v7', 'Vencem em 7 dias'], ['semprazo', 'Sem prazo'], ['semdono', 'Sem dono nominal'], ['repact', 'Repactuadas e vencidas'], ['solvefez', 'Canceladas: Solve executou'], ['concluidas', 'Concluídas'], ['canceladas', 'Canceladas'], ['todas', 'Todas']];
+function filtraAcoes() {
+  const f = S.fa, q = f.q.trim().toLowerCase();
+  return sortAcoes(acoesC(S.cli).filter(a => {
+    const s = situacao(a);
+    switch (f.sit) {
+      case 'abertas': if (!aberta(a)) return false; break;
+      case 'vencidas': if (s.o !== 1) return false; break;
+      case 'v7': if (s.o !== 2) return false; break;
+      case 'semprazo': if (!(aberta(a) && !a.prazo)) return false; break;
+      case 'semdono': if (!(aberta(a) && !st.nominal(a.resp))) return false; break;
+      case 'repact': if (!(aberta(a) && a.reprogramacoes.length && a.prazo && a.prazo < HOJE)) return false; break;
+      case 'solvefez': if (!solveFez(a)) return false; break;
+      case 'concluidas': if (a.status !== 'Concluída') return false; break;
+      case 'canceladas': if (a.status !== 'Cancelada') return false; break;
+      default: break;
+    }
+    if (f.resp && a.resp !== f.resp) return false;
+    if (f.area && a.area !== f.area) return false;
+    const d = st.demanda(a.demanda);
+    if (f.tipo && (!d || d.tipo !== f.tipo)) return false;
+    if (q && !`${a.acao} ${d ? d.titulo : ''} ${a.id} ${st.nome(a.resp)} ${a.como}`.toLowerCase().includes(q)) return false;
+    return true;
+  }));
+}
+function renderAcoes() {
+  if (!st.temDados(S.cli)) return semDados();
+  const f = S.fa, list = filtraAcoes(), lista = acoesC(S.cli);
+  const resps = [...new Set(lista.map(a => a.resp).filter(Boolean))].sort((a, b) => st.nome(a).localeCompare(st.nome(b)));
+  const areas = [...new Set(lista.map(a => a.area).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+  const tipos = [...new Set(demandasC(S.cli).map(d => d.tipo))];
+  const opt = (v, cur, lab) => `<option value="${esc(v)}"${v === cur ? ' selected' : ''}>${esc(lab)}</option>`;
+  return `
+  <div class="toolbar">
+    <input type="search" id="fq" placeholder="Buscar ação, demanda, código ou pessoa" value="${esc(f.q)}" aria-label="Buscar">
+    <select id="fsit" aria-label="Situação">${SIT.map(([v, l]) => opt(v, f.sit, l)).join('')}</select>
+    <select id="fresp" aria-label="Responsável">${opt('', f.resp, 'Todos os responsáveis')}${resps.map(r => opt(r, f.resp, st.nome(r))).join('')}</select>
+    <select id="farea" aria-label="Área">${opt('', f.area, 'Todas as áreas')}${areas.map(r => opt(r, f.area, r)).join('')}</select>
+    <select id="ftipo" aria-label="Tipo de demanda">${opt('', f.tipo, 'Todos os tipos')}${tipos.map(r => opt(r, f.tipo, r)).join('')}</select>
+  </div>
+  <div class="small muted">${list.length} ${plural(list.length, 'ação', 'ações')} · ordenadas pela urgência: vencidas primeiro, pelo maior atraso</div>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Código</th><th>Ação</th><th>Demanda</th><th>Responsável</th><th>Prazo</th><th>Situação</th></tr></thead>
+    <tbody>${list.length ? list.map(a => { const d = st.demanda(a.demanda); return `<tr class="click" data-acao="${esc(a.id)}">
+      <td class="c-id">${esc(a.id)}</td>
+      <td style="min-width:240px">${esc(a.acao)}${a.reprogramacoes.length ? `<span class="sub">${a.reprogramacoes.length}ª reprogramação · prazo original ${fmt(a.prazoOriginal)}</span>` : ''}</td>
+      <td style="min-width:180px">${esc(d ? d.titulo : a.demanda)}<span class="sub">${esc(d ? d.tipo : '')}</span></td>
+      <td class="c-nw">${respHtml(a.resp)}</td>
+      <td class="num c-nw">${fmt(a.prazo)}</td>
+      <td class="c-nw">${pill(situacao(a))}</td></tr>`; }).join('') : '<tr><td colspan="6"><div class="empty">Nenhuma ação com esses filtros.</div></td></tr>'}</tbody></table></div>`;
+}
+
+/* ---------- Fórum ---------- */
+const STEPS = ['Painel', 'Pendências', 'Questões críticas', 'Deliberações', 'Ata'];
+function hojeNoCliente(cli) {
+  const ac = acoesC(cli);
+  return {
+    concl: ac.filter(a => a.status === 'Concluída' && a.conclusao === HOJE),
+    reprog: st.reprog.filter(r => r.cli === cli && r.em === HOJE),
+    canc: ac.filter(a => a.status === 'Cancelada' && a.modifiedDay === HOJE && a.motivoCancel),
+    novas: ac.filter(a => a.registro === HOJE && a.origem !== 'Migração'),
+    delib: st.delib.filter(x => x.cli === cli && x.data === HOJE)
+  };
+}
+function renderForum() {
+  if (!st.temDados(S.cli)) return semDados();
+  const step = S.step, h = hojeNoCliente(S.cli);
+  const fo = st.forumDeHoje(S.cli);
+  const head = `<p class="lede-sub" style="margin:0">Pauta do fórum: painel, pendências e questões críticas. Tudo o que você muda aqui grava na hora no SharePoint e entra na ata.</p>
+  <nav class="stepper" aria-label="Pauta">${STEPS.map((s, k) => `<button data-step="${k}" ${k === step ? 'aria-current="step"' : ''}><span class="h">passo ${k + 1}</span><span class="s">${s}</span></button>`).join('')}</nav>
+  ${(h.concl.length + h.reprog.length + h.canc.length + h.novas.length + h.delib.length) ? `<div class="kv"><span class="label" style="align-self:center">Hoje</span><span><b>${h.concl.length}</b> concluídas</span><span><b>${h.reprog.length}</b> repactuadas</span><span><b>${h.canc.length}</b> canceladas</span><span><b>${h.novas.length}</b> novas</span><span><b>${h.delib.length}</b> deliberações</span>${fo && fo.ata ? '<span class="pill good">ata salva</span>' : ''}</div>` : ''}`;
+  let body = '';
+  if (step === 0) {
+    const m = M(acoesC(S.cli));
+    const frs = frentesC(S.cli).map(f => ({ f, i: infoFr(f) })).filter(x => x.i.farol === 'bad');
+    body = `<div class="strip">
+      <button data-sig="abertas"><span class="v">${m.ab}</span><span class="k">Abertas</span></button>
+      <button class="bad" data-sig="vencidas"><span class="v">${m.venc}</span><span class="k">Vencidas</span></button>
+      <button class="warn" data-sig="v7"><span class="v">${m.v7}</span><span class="k">Vencem em 7 dias</span></button>
+      <button class="warn" data-sig="semprazo"><span class="v">${m.semp}</span><span class="k">Sem prazo</span></button>
+      <button data-sig="semdono"><span class="v">${m.semDono}</span><span class="k">Sem dono</span></button>
+      <button data-sig="concluidas"><span class="v">${m.conc}</span><span class="k">Concluídas</span></button></div>
+      <section class="panel"><header><h2>Frentes em vermelho</h2><span class="small muted">${frs.length} de ${frentesC(S.cli).length}</span></header>
+      ${frs.length ? `<div class="list">${frs.map(({ f, i }) => `<div class="li">${dot('bad')}<div class="body"><b>${esc(f.nome)}</b><div class="meta"><span>${esc(st.nome(f.dono))}</span><span>${i.status === 'Sem plano ativo' ? 'sem plano ativo' : `${i.venc} ${plural(i.venc, 'ação vencida', 'ações vencidas')}`}</span>${i.atrasada ? `<span>fim previsto ${fmt(f.fim)}</span>` : ''}</div></div></div>`).join('')}</div>` : '<div class="empty small">Nenhuma frente em vermelho.</div>'}</section>
+      <div><button class="btn primary" data-step="1">Seguir para pendências</button></div>`;
+  } else if (step === 1) {
+    const ac = sortAcoes(acoesC(S.cli).filter(a => {
+      if (!aberta(a)) return false;
+      const d = st.demanda(a.demanda);
+      if (d && d.tipo === 'Questão crítica') return false;
+      return situacao(a).o <= 3 || a.reprogramacoes.length >= 2;
+    }));
+    const grp = {};
+    ac.forEach(a => { (grp[a.resp || '—'] = grp[a.resp || '—'] || []).push(a); });
+    const ord = Object.entries(grp).sort((x, y) => y[1].length - x[1].length);
+    body = `<div class="small muted">Só as exceções: ações vencidas, sem prazo, vencendo até ${fmt(LIM7)} ou já reprogramadas duas vezes, agrupadas por responsável. ${ac.length} no total.</div>
+      ${ord.length ? ord.map(([r, l]) => `<section class="panel"><header><h2>${esc(st.nome(r))}</h2><span class="small muted">${l.length} ${plural(l.length, 'ação', 'ações')}</span></header>${quickTable(l)}</section>`).join('') : '<div class="empty">Nenhuma pendência fora da regra.</div>'}
+      <div><button class="btn primary" data-step="2">Seguir para questões críticas</button></div>`;
+  } else if (step === 2) {
+    const qcs = demandasC(S.cli).filter(d => d.tipo === 'Questão crítica').map(d => ({ d, i: infoDem(d) })).filter(x => x.i.aberta)
+      .sort((a, b) => (a.d.prioridade || 99) - (b.d.prioridade || 99) || SEV[a.i.farol] - SEV[b.i.farol]);
+    body = `${qcs.length ? qcs.map(({ d, i }) => `<div class="qc"><header>${dot(i.farol, FAROL[i.farol])}${d.prioridade ? `<span class="prio">P${d.prioridade}</span>` : ''}<h3>${esc(d.titulo)}</h3><span class="small muted">${d.resp ? esc(st.nome(d.resp)) : 'sem responsável'}</span>${i.validar ? '<span class="pill acc">validar encerramento</span>' : ''}</header>
+      ${i.ab.length ? quickTable(sortAcoes(i.ab)) : i.validar ? `<div class="row-actions"><span class="small">Todas as ações foram concluídas. Se o fórum confirmar, a questão sai da pauta.</span><button class="btn sm primary" data-do="encerrarDem" data-id="${esc(d.id)}">Confirmar encerramento</button></div>` : `<div class="row-actions"><span class="pill bad">Sem plano de ação</span><button class="btn sm" data-do="capturar" data-dem-pre="${esc(d.id)}">+ Criar ação</button></div>`}</div>`).join('') : '<div class="empty">Nenhuma questão crítica aberta.</div>'}
+      <div><button class="btn primary" data-step="3">Seguir para deliberações</button></div>`;
+  } else if (step === 3) {
+    const pes = st.pessoasPara(S.cli);
+    const dems = demandasC(S.cli).filter(d => !d.encerrada).sort((a, b) => a.titulo.localeCompare(b.titulo));
+    const lista = st.delib.filter(x => x.cli === S.cli).sort((a, b) => (b.data || '').localeCompare(a.data || '') || b.id.localeCompare(a.id, 'pt', { numeric: true }));
+    body = `<section class="panel"><header><h2>Registrar deliberação</h2></header>
+      <form id="fDelib" class="form">
+        <div class="field full"><label for="dTexto">O que foi decidido</label><textarea id="dTexto" required placeholder="Ex.: Financeiro envia a conciliação de setembro até sexta"></textarea></div>
+        <div class="field"><label for="dTipo">Tipo</label><select id="dTipo"><option>Deliberado</option><option>Encaminhamento</option><option>Informativo</option></select></div>
+        <div class="field"><label for="dDem">Demanda relacionada</label><select id="dDem"><option value="">Nenhuma (cria uma pendência)</option>${dems.map(d => `<option value="${esc(d.id)}">${esc(d.titulo)}</option>`).join('')}</select></div>
+        <div class="field"><label for="dResp">Responsável</label><select id="dResp"><option value="">Escolha</option>${pes.map(p => `<option value="${esc(p.id)}">${esc(p.nome)}${p.empresa === 'Solve' ? ' (Solve)' : ''}</option>`).join('')}</select></div>
+        <div class="field"><label for="dPrazo">Prazo</label><input type="date" id="dPrazo" min="${HOJE}"></div>
+        <div class="field full"><label class="check"><input type="checkbox" id="dGera" checked> Gerar ação no plano com esse responsável e prazo</label></div>
+        <div class="full row-actions"><button class="btn primary" type="submit">Registrar deliberação</button><span class="small err-text" id="dErr" role="alert"></span></div>
+      </form></section>
+      <section class="panel"><header><h2>Deliberações registradas</h2></header>${lista.length ? `<div class="list">${lista.map(x => `<div class="li"><span class="tag">${esc(x.tipo)}</span><div class="body">${esc(x.texto)}<div class="meta"><span>${esc(x.resp ? st.nome(x.resp) : '—')}</span><span>${x.data ? fmtF(x.data) : 'sem data no arquivo original'}</span>${x.demanda && st.demanda(x.demanda) ? `<span>${esc(st.demanda(x.demanda).titulo)}</span>` : ''}${x.acaoId ? `<button class="linkbtn" data-acao="${esc(x.acaoId)}">${esc(x.acaoId)}</button>` : ''}</div></div></div>`).join('')}</div>` : '<div class="empty small">Nenhuma deliberação registrada.</div>'}</section>
+      <div><button class="btn primary" data-step="4">Gerar ata</button></div>`;
+  } else {
+    const texto = S.ataRascunho && S.ataRascunho.cli === S.cli ? S.ataRascunho.texto : (fo && fo.ata) || ata(S.cli);
+    const part = S.ataRascunho && S.ataRascunho.cli === S.cli ? S.ataRascunho.part : (fo && fo.participantes) || '';
+    body = `<section class="panel"><header><h2>Ata para o grupo do WhatsApp</h2><span class="row-actions"><button class="btn sm" data-do="gerarAta">Gerar de novo</button><button class="btn sm" data-do="copiarAta">Copiar texto</button></span></header>
+      <div class="field" style="margin-bottom:10px"><label for="ataPart">Participantes</label><input id="ataPart" value="${esc(part)}" placeholder="Nomes de quem participou, separados por vírgula"></div>
+      <textarea class="out" id="ataTxt" aria-label="Ata">${esc(texto)}</textarea>
+      <div class="row-actions" style="margin-top:10px"><button class="btn primary" data-do="salvarAta">Salvar ata no SharePoint</button><span class="small muted">${fo && fo.ata ? `Ata de hoje salva em ${esc(fo.id)}.` : 'A ata fica no histórico de fóruns do cliente.'}</span></div>
+      </section>`;
+  }
+  return head + body;
+}
+function quickTable(l, showCli) {
+  return `<div style="overflow-x:auto"><table class="mini"><tbody>${l.map(a => { const d = st.demanda(a.demanda); return `<tr data-acao="${esc(a.id)}"><td class="c-id">${esc(a.id)}</td><td style="min-width:220px">${showCli ? `<span class="tag">${esc(a.cli)}</span> ` : ''}${esc(a.acao)}<span class="sub" style="display:block;color:var(--muted);font-size:.8rem">${esc(d ? d.titulo : '')}${a.reprogramacoes.length >= 2 ? ` · ${a.reprogramacoes.length}ª reprogramação` : ''}</span></td><td class="c-nw">${esc(st.nome(a.resp))}</td><td class="c-nw">${pill(situacao(a))}</td>
+    <td class="c-nw" style="text-align:right"><span class="row-actions" style="justify-content:flex-end"><button class="btn sm" data-q="concluir" data-id="${esc(a.id)}">Concluída</button><button class="btn sm" data-q="reprog" data-id="${esc(a.id)}">${a.prazo ? 'Novo prazo' : 'Definir prazo'}</button></span></td></tr>`; }).join('')}</tbody></table></div>`;
+}
+function ata(cli) {
+  const m = M(acoesC(cli)), h = hojeNoCliente(cli), L = [];
+  L.push(`*Fórum de Gestão | ${cliNome(cli)} | ${fmtF(HOJE)}*`, '');
+  L.push('*Contexto*', `${m.ab} ações abertas: ${m.venc} vencidas, ${m.semp} sem prazo e ${m.v7} vencendo nos próximos 7 dias.`, '');
+  L.push('*Ações realizadas*');
+  if (h.concl.length) h.concl.forEach(a => L.push(`• ${a.acao} (${st.nome(a.resp)})`)); else L.push('• Nenhuma ação concluída hoje.');
+  h.canc.forEach(a => L.push(`• Cancelada: ${a.acao}. Motivo: ${a.motivoCancel}`));
+  L.push('');
+  if (h.delib.length) { L.push('*Deliberações*'); h.delib.forEach(x => L.push(`• ${x.texto}${x.resp ? ` (${st.nome(x.resp)})` : ''}`)); L.push(''); }
+  L.push('*Riscos e dificuldades*');
+  const rs = riscos(cli); if (rs.length) rs.forEach(r => L.push('• ' + r)); else L.push('• Nenhum risco fora da regra.');
+  L.push('');
+  L.push('*Próximos passos*');
+  const pp = proximos(cli); if (pp.length) pp.forEach(p => L.push('• ' + p)); else L.push('• Nenhum novo compromisso registrado hoje.');
+  return L.join('\n');
+}
+function riscos(cli) {
+  const g = {};
+  acoesC(cli).filter(a => aberta(a) && a.prazo && a.prazo < HOJE).forEach(a => { const x = g[a.demanda] = g[a.demanda] || { n: 0, max: 0 }; x.n++; x.max = Math.max(x.max, diff(HOJE, a.prazo)); });
+  const out = Object.entries(g).sort((a, b) => b[1].n - a[1].n || b[1].max - a[1].max).slice(0, 4)
+    .map(([id, x]) => `${(st.demanda(id) || { titulo: id }).titulo}: ${x.n} ${plural(x.n, 'ação vencida', 'ações vencidas')}, a mais antiga há ${x.max} dias`);
+  const sp = demandasC(cli).filter(d => infoDem(d).status === 'Sem plano de ação');
+  if (sp.length) out.push(`${sp.length} ${plural(sp.length, 'demanda', 'demandas')} sem plano de ação: ${sp.map(d => d.titulo).join('; ')}`);
+  const sd = M(acoesC(cli)).semDono; if (sd) out.push(`${sd} ${plural(sd, 'ação', 'ações')} sem dono nominal`);
+  return out;
+}
+function proximos(cli) {
+  const ids = new Set(), out = [];
+  const linha = a => `${a.acao} — *${st.nome(a.resp)}* — até ${fmt(a.prazo)}`;
+  const h = hojeNoCliente(cli);
+  [...h.reprog.map(r => st.acao(r.acao)), ...h.novas].forEach(a => { if (a && aberta(a) && a.prazo && !ids.has(a.id)) { ids.add(a.id); out.push(linha(a)); } });
+  acoesC(cli).filter(a => aberta(a) && a.prazo && a.prazo >= HOJE && a.prazo <= LIM7 && !ids.has(a.id)).sort((a, b) => a.prazo.localeCompare(b.prazo)).forEach(a => out.push(linha(a)));
+  return out;
+}
+
+/* ---------- Minha semana ---------- */
+function renderSemana() {
+  const ab = st.acoes.filter(a => aberta(a) && st.nominal(a.resp));
+  const cont = {}; ab.forEach(a => { cont[a.resp] = (cont[a.resp] || 0) + 1; });
+  const pes = Object.entries(cont).sort((a, b) => b[1] - a[1] || st.nome(a[0]).localeCompare(st.nome(b[0])));
+  const eu = st.eu();
+  if (!S.pessoaSemana || !cont[S.pessoaSemana]) S.pessoaSemana = eu && cont[eu.id] ? eu.id : (pes[0] || [])[0];
+  if (!S.pessoaSemana) return '<div class="empty">Nenhuma ação aberta com responsável nominal.</div>';
+  const p = S.pessoaSemana, minhas = sortAcoes(ab.filter(a => a.resp === p));
+  const varios = new Set(minhas.map(a => a.cli)).size > 1;
+  const sec = [['Vencidas', minhas.filter(a => situacao(a).o === 1)], [`Vencem até ${fmt(LIM7)}`, minhas.filter(a => situacao(a).o === 2)], ['Sem prazo', minhas.filter(a => situacao(a).o === 3)], ['Depois', minhas.filter(a => situacao(a).o === 4)]];
+  return `
+  <p class="lede-sub" style="margin:0">O que vence, o que atrasou e o que depende de cada pessoa, em todos os clientes. A mensagem de cobrança sai pronta para o WhatsApp.</p>
+  <div class="toolbar"><label class="small muted" for="selP">Ver como</label><select id="selP">${pes.map(([n, c]) => `<option value="${esc(n)}"${n === p ? ' selected' : ''}>${esc(st.nome(n))}${st.pessoa(n) && st.pessoa(n).empresa === 'Solve' ? ' (Solve)' : ''} · ${c}</option>`).join('')}</select>${eu && p === eu.id ? '<span class="pill acc">você</span>' : ''}</div>
+  <div class="grid3">
+    <div class="stack">${sec.filter(s => s[1].length).map(([t, l]) => `<section class="panel"><header><h2>${t}</h2><span class="small muted">${l.length}</span></header>${quickTable(l, varios)}</section>`).join('') || '<div class="empty">Nenhuma ação aberta.</div>'}</div>
+    <section class="panel"><header><h2>Mensagem de cobrança</h2><button class="btn sm" data-do="copiarCob">Copiar</button></header><textarea class="out" id="cobTxt" readonly aria-label="Mensagem de cobrança" style="min-height:260px">${esc(cobranca(p, sec, varios))}</textarea></section>
+  </div>`;
+}
+function cobranca(p, sec, varios) {
+  const L = [`Oi, ${st.nome(p)}! Tudo bem?`, 'Seguem suas ações em aberto:', ''];
+  sec.forEach(([t, l]) => { if (!l.length) return; L.push(`*${t}*`); l.forEach(a => L.push(`• ${varios ? `[${cliNome(a.cli)}] ` : ''}${a.acao}${a.prazo ? ` (prazo ${fmt(a.prazo)})` : ''}`)); L.push(''); });
+  L.push('Pode me passar a previsão de cada uma até amanhã?');
+  return L.join('\n');
+}
+
+/* ---------- gaveta e janela ---------- */
+function renderLayer() {
+  const L = $('#layer');
+  if (S.drawer) L.innerHTML = `<div class="scrim" data-do="fechar"></div>${drawerHtml()}`;
+  else if (S.modal) L.innerHTML = `<div class="scrim" data-do="fechar"></div>${modalHtml()}`;
+  else L.innerHTML = '';
+}
+function drawerHtml() {
+  const { id, modo } = S.drawer, a = st.acao(id);
+  if (!a) return '';
+  const d = st.demanda(a.demanda), fr = d && d.frente ? st.frente(d.frente) : null, s = situacao(a);
+  const hist = a.reprogramacoes.map((r, k) => `<div><b>${k + 1}ª reprogramação</b>: ${fmt(r.de)} → ${fmt(r.para)}<br><span class="muted">${esc(r.motivo)}${r.em ? ` · ${fmtF(r.em)}` : ''}${r.por ? ` · ${esc(r.por)}` : ''}</span></div>`).join('');
+  let form = '';
+  if (modo === 'reprog') {
+    const definir = !a.prazo;
+    form = `<form id="fRep" class="form boxed">
+      ${!definir && a.reprogramacoes.length >= 1 ? `<div class="full note">Esta será a ${a.reprogramacoes.length + 1}ª reprogramação. A partir da segunda, a ação entra na pauta do fórum.</div>` : ''}
+      <div class="field"><label for="rPrazo">${definir ? 'Prazo' : 'Novo prazo'}</label><input type="date" id="rPrazo" required min="${HOJE}"></div>
+      ${definir ? '<div class="field"><label>&nbsp;</label><span class="small muted">A ação ainda não tinha prazo; este passa a ser o prazo original.</span></div>' : '<div class="field full"><label for="rMot">Motivo</label><input type="text" id="rMot" required placeholder="Ex.: aguardando NCM da contabilidade"></div>'}
+      <div class="full row-actions"><button class="btn primary" type="submit">${definir ? 'Salvar prazo' : 'Salvar novo prazo'}</button><button class="btn" type="button" data-do="modo" data-m="">Voltar</button><span class="small err-text" id="rErr" role="alert"></span></div></form>`;
+  }
+  if (modo === 'cancel') form = `<form id="fCan" class="form boxed">
+      <div class="field full"><label for="cMot">Por que cancelar?</label><input type="text" id="cMot" required placeholder="Ex.: substituída por outra ação"></div>
+      <div class="full row-actions"><button class="btn danger" type="submit">Cancelar ação</button><button class="btn" type="button" data-do="modo" data-m="">Voltar</button><span class="small err-text" id="cErr" role="alert"></span></div></form>`;
+  return `<aside class="drawer" role="dialog" aria-modal="true" aria-labelledby="dwT">
+    <div class="dh"><div style="min-width:0"><div class="label mono">${esc(a.id)} · ${esc(cliNome(a.cli))}</div><h2 id="dwT" style="margin-top:4px">${esc(a.acao)}</h2><div style="margin-top:8px" class="row-actions">${pill(s)}<span class="pill ok">${esc(a.status)}</span></div></div><button class="btn sm ghost" data-do="fechar" aria-label="Fechar">✕</button></div>
+    <div class="db">
+      <dl class="w5">
+        <dt>O QUÊ</dt><dd>${esc(a.acao)}</dd>
+        <dt>POR QUÊ</dt><dd>${a.problema || a.causa ? `${esc(a.problema)}${a.problema && a.causa ? '<br>' : ''}${a.causa ? `<span class="muted">Causa: ${esc(a.causa)}</span>` : ''}` : '<span class="muted">Não registrado</span>'}</dd>
+        <dt>QUEM</dt><dd>${respHtml(a.resp, a.apoio)}</dd>
+        <dt>QUANDO</dt><dd>Início ${fmtF(a.inicio)} · prazo ${fmtF(a.prazo)}${a.reprogramacoes.length ? `<span class="sub">prazo original ${fmtF(a.prazoOriginal)}</span>` : ''}${a.conclusao ? `<span class="sub">concluída em ${fmtF(a.conclusao)}</span>` : ''}</dd>
+        <dt>ONDE</dt><dd>${esc(a.area) || '<span class="muted">—</span>'}</dd>
+        <dt>COMO</dt><dd>${a.como ? esc(a.como) : '<span class="muted">Sem observação</span>'}</dd>
+        <dt>QUANTO</dt><dd>${a.quanto !== null && a.quanto !== undefined ? 'R$ ' + Number(a.quanto).toLocaleString('pt-BR', { minimumFractionDigits: 2 }) : '<span class="muted">Não registrado</span>'}</dd>
+      </dl>
+      <div class="panel" style="padding:12px;background:var(--surface-2)"><div class="label">Demanda</div><button class="linkbtn" data-dem-go="${esc(d ? d.id : '')}" style="margin-top:4px">${esc(d ? d.titulo : a.demanda)}</button><div class="small muted">${esc(d ? d.tipo : '')}${fr ? ` · frente ${esc(fr.nome)}` : ''}</div></div>
+      ${hist ? `<div><div class="label" style="margin-bottom:6px">Histórico de prazo</div><div class="hist">${hist}</div></div>` : ''}
+      ${a.motivoCancel ? `<div class="note">Cancelada: ${esc(a.motivoCancel)}</div>` : ''}
+      <div class="small muted">Origem: ${a.linha ? `linha ${a.linha} de ${esc(a.arquivo || 'arquivo de origem')}` : esc(a.origem || '—')} · registrada em ${fmtF(a.registro)}${a.statusOriginal ? ` · status no arquivo: “${esc(a.statusOriginal)}”` : ''}${a.respOriginal && a.respOriginal !== st.nome(a.resp) ? ` · responsável no arquivo: “${esc(a.respOriginal)}”` : ''}</div>
+      ${form}
+    </div>
+    ${aberta(a) && !modo ? `<div class="df"><button class="btn primary" data-do="concluir">Marcar como concluída</button><button class="btn" data-do="modo" data-m="reprog">${a.prazo ? 'Novo prazo' : 'Definir prazo'}</button>${a.status === 'Não iniciada' ? '<button class="btn" data-do="iniciar">Em andamento</button>' : ''}<button class="btn danger ghost" data-do="modo" data-m="cancel">Cancelar</button></div>` : ''}
+  </aside>`;
+}
+function modalHtml() {
+  const cli = S.modal.cli || S.cli;
+  const pre = S.modal.dem || '';
+  const pes = st.pessoasPara(cli);
+  const dems = demandasC(cli).filter(d => d.id === pre || !d.encerrada).sort((a, b) => a.titulo.localeCompare(b.titulo));
+  const areaPre = pre && st.demanda(pre) ? st.demanda(pre).area : '';
+  return `<div class="modal" role="dialog" aria-modal="true" aria-labelledby="mT">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px"><h2 id="mT">Nova ação</h2><button class="btn sm ghost" data-do="fechar" aria-label="Fechar">✕</button></div>
+    <form id="fNova" class="form">
+      <div class="field full"><label for="mCli">Cliente</label><select id="mCli">${clientesOrd().map(c => `<option value="${esc(c.id)}"${c.id === cli ? ' selected' : ''}>${esc(c.nome)}</option>`).join('')}</select></div>
+      <div class="field full"><label for="mAcao">O quê (ação)</label><input id="mAcao" required maxlength="255" placeholder="Verbo no infinitivo + objeto. Ex.: Enviar a posição do estoque de outubro"></div>
+      <div class="field full"><label for="mPq">Por quê (problema ou causa)</label><input id="mPq" maxlength="255"></div>
+      <div class="field full"><label for="mDem">Demanda</label><select id="mDem"><option value="">Nova pendência com o mesmo título</option>${dems.map(d => `<option value="${esc(d.id)}"${d.id === pre ? ' selected' : ''}>${esc(d.titulo)}</option>`).join('')}</select></div>
+      <div class="field"><label for="mResp">Quem</label><select id="mResp" required><option value="">Escolha</option>${pes.map(p => `<option value="${esc(p.id)}">${esc(p.nome)}${p.empresa === 'Solve' ? ' (Solve)' : ''}</option>`).join('')}</select></div>
+      <div class="field"><label for="mPrazo">Prazo</label><input type="date" id="mPrazo" required min="${HOJE}"></div>
+      <div class="field"><label for="mArea">Onde (área)</label><select id="mArea">${AREAS.map(a => `<option${a === (areaPre || 'Controladoria') ? ' selected' : ''}>${esc(a)}</option>`).join('')}</select></div>
+      <div class="field"><label for="mComo">Como (opcional)</label><input id="mComo" maxlength="500"></div>
+      <div class="full row-actions"><button class="btn primary" type="submit">Registrar ação</button><span class="small err-text" id="mErr" role="alert"></span></div>
+    </form>
+    <p class="small muted" style="margin:0">Ação sem dono nominal ou sem prazo não entra: é a regra que evita repetir o problema da planilha. Se a pessoa não aparece na lista, cadastre-a em GP_Pessoas.</p>
+  </div>`;
+}
+function abrirAcao(id) { S.drawer = { id, modo: null }; S.modal = null; renderLayer(); }
+function fechar() { S.drawer = null; S.modal = null; renderLayer(); }
+
+/* ---------- gravação ---------- */
+async function grava(fn, okMsg) {
+  if (S.busy) return;
+  S.busy = true; document.body.classList.add('busy');
+  try {
+    const r = await fn();
+    toast(typeof okMsg === 'function' ? okMsg(r) : okMsg);
+  } catch (e) {
+    console.error(e);
+    toast('Não consegui gravar no SharePoint: ' + (e.message || e) + '. Recarreguei os dados.', true);
+    await recarregar(true);
+  } finally {
+    S.busy = false; document.body.classList.remove('busy');
+    render();
+  }
+}
+async function recarregar(silencioso) {
+  if (S.reloading) return;
+  S.reloading = true; document.body.classList.add('busy');
+  try { await st.load(); if (!silencioso) toast('Dados atualizados do SharePoint'); }
+  catch (e) { console.error(e); toast('Não consegui ler as listas: ' + (e.message || e), true); }
+  finally { S.reloading = false; document.body.classList.remove('busy'); render(); }
+}
+
+/* ---------- eventos ---------- */
+function onClick(e) {
+  const t = e.target.closest('button, a, tr[data-acao], tr[data-cli-go], [data-do]');
+  if (!t) return;
+  const ds = t.dataset;
+  if (ds.cliSet) S.cli = ds.cliSet;
+  if (ds.cliGo) { S.cli = ds.cliGo; go('visao'); return; }
+  if (ds.sig) { e.preventDefault(); S.fa = { q: '', sit: ds.sig, resp: '', area: '', tipo: '' }; S.drawer = null; go('acoes'); return; }
+  if (ds.resp) { S.fa = { q: '', sit: 'abertas', resp: ds.resp, area: '', tipo: '' }; go('acoes'); return; }
+  if (ds.demGo) { S.demOpen.add(ds.demGo); S.fd = { tipo: 'todas', st: 'todas' }; S.drawer = null; go('demandas'); setTimeout(() => { const el = document.getElementById('dem-' + ds.demGo); if (el) el.scrollIntoView({ block: 'center' }); }, 30); return; }
+  if (ds.dem) { S.demOpen.has(ds.dem) ? S.demOpen.delete(ds.dem) : S.demOpen.add(ds.dem); render(); const b = document.querySelector(`[data-dem="${CSS.escape(ds.dem)}"]`); if (b) b.focus(); return; }
+  if (ds.fdTipo) { S.fd.tipo = ds.fdTipo; render(); return; }
+  if (ds.fdSt) { S.fd.st = ds.fdSt; render(); return; }
+  if (ds.step !== undefined) { S.step = +ds.step; render(); window.scrollTo({ top: 0 }); return; }
+  if (ds.q === 'concluir') { e.stopPropagation(); const a = st.acao(ds.id); if (a) grava(() => st.concluir(a), `${a.id} concluída`); return; }
+  if (ds.q === 'reprog') { e.stopPropagation(); S.drawer = { id: ds.id, modo: 'reprog' }; renderLayer(); const i = $('#rPrazo'); if (i) i.focus(); return; }
+  if (ds.acao) { abrirAcao(ds.acao); return; }
+  if (ds.go) { if (ds.fd) S.fd = { tipo: 'todas', st: ds.fd }; go(ds.go); return; }
+  switch (ds.do) {
+    case 'fechar': fechar(); break;
+    case 'modo': S.drawer.modo = ds.m || null; renderLayer(); { const i = $(ds.m === 'cancel' ? '#cMot' : '#rPrazo'); if (i) i.focus(); } break;
+    case 'concluir': { const a = st.acao(S.drawer.id); grava(() => st.concluir(a), `${a.id} concluída`); break; }
+    case 'iniciar': { const a = st.acao(S.drawer.id); grava(() => st.iniciar(a), `${a.id} em andamento`); break; }
+    case 'encerrarDem': { const d = st.demanda(ds.id); if (d) grava(() => st.encerrarDemanda(d), 'Demanda encerrada'); break; }
+    case 'capturar': S.drawer = null; S.modal = { dem: ds.demPre || '', cli: S.cli }; renderLayer(); { const i = $('#mAcao'); if (i) i.focus(); } break;
+    case 'copiarAta': copiar($('#ataTxt').value, $('#ataTxt')); break;
+    case 'gerarAta': S.ataRascunho = null; $('#ataTxt').value = ata(S.cli); break;
+    case 'salvarAta': { const texto = $('#ataTxt').value, part = $('#ataPart').value.trim(); S.ataRascunho = { cli: S.cli, texto, part }; grava(() => st.salvarAta(S.cli, texto, part), 'Ata salva no SharePoint'); break; }
+    case 'copiarCob': copiar($('#cobTxt').value, $('#cobTxt')); break;
+    case 'recarregar': recarregar(); break;
+    case 'sair': if (ctx.logout) ctx.logout(); break;
+    default: break;
+  }
+}
+function onSubmit(e) {
+  e.preventDefault();
+  const f = e.target;
+  if (f.id === 'fRep') {
+    const a = st.acao(S.drawer.id), p = $('#rPrazo').value;
+    if (!p || p < HOJE) { $('#rErr').textContent = 'Escolha uma data a partir de hoje.'; return; }
+    if (!a.prazo) { grava(async () => { await st.definirPrazo(a, p); S.drawer = { id: a.id, modo: null }; }, `Prazo de ${a.id}: ${fmt(p)}`); return; }
+    const m = $('#rMot').value.trim();
+    if (!m) { $('#rErr').textContent = 'Informe o motivo: sem motivo, o novo prazo não é aceito.'; return; }
+    grava(async () => { await st.reprogramar(a, p, m); S.drawer = { id: a.id, modo: null }; }, `Novo prazo de ${a.id}: ${fmt(p)}`);
+  }
+  if (f.id === 'fCan') {
+    const a = st.acao(S.drawer.id), m = $('#cMot').value.trim();
+    if (!m) { $('#cErr').textContent = 'Informe o motivo do cancelamento.'; return; }
+    grava(async () => { await st.cancelar(a, m); S.drawer = { id: a.id, modo: null }; }, `${a.id} cancelada`);
+  }
+  if (f.id === 'fNova') {
+    const cli = $('#mCli').value, acao = $('#mAcao').value.trim(), resp = $('#mResp').value, prazo = $('#mPrazo').value;
+    if (!acao || !resp || !prazo) { $('#mErr').textContent = 'Preencha ação, responsável e prazo.'; return; }
+    if (prazo < HOJE) { $('#mErr').textContent = 'O prazo precisa ser a partir de hoje.'; return; }
+    if (!st.nominal(resp)) { $('#mErr').textContent = 'Escolha uma pessoa, não uma empresa ou setor.'; return; }
+    grava(async () => {
+      const a = await st.novaAcao({ cli, acao, porque: $('#mPq').value.trim(), dem: $('#mDem').value, resp, prazo, area: $('#mArea').value, como: $('#mComo').value.trim(), origem: 'Captura rápida' });
+      S.modal = null; S.cli = cli; return a;
+    }, a => `Ação ${a.id} registrada`);
+  }
+  if (f.id === 'fDelib') {
+    const texto = $('#dTexto').value.trim(), gera = $('#dGera').checked, resp = $('#dResp').value, prazo = $('#dPrazo').value, dem = $('#dDem').value;
+    if (!texto) { $('#dErr').textContent = 'Escreva o que foi decidido.'; return; }
+    if (gera && (!resp || !prazo)) { $('#dErr').textContent = 'Para gerar ação, escolha responsável e prazo.'; return; }
+    if (gera && prazo < HOJE) { $('#dErr').textContent = 'O prazo precisa ser a partir de hoje.'; return; }
+    grava(() => st.registrarDeliberacao({ cli: S.cli, texto, tipo: $('#dTipo').value, resp: resp || null, dem: dem || null, prazo, gera }), 'Deliberação registrada');
+  }
+}
+function onInput(e) {
+  if (e.target.id === 'fq') { S.fa.q = e.target.value; render(); }
+  if (e.target.id === 'ataTxt' || e.target.id === 'ataPart') S.ataRascunho = { cli: S.cli, texto: $('#ataTxt').value, part: $('#ataPart').value };
+}
+function onChange(e) {
+  const id = e.target.id;
+  if (id === 'selCli') { S.cli = e.target.value; try { localStorage.setItem('gp.cli', S.cli); } catch (x) { /* sem storage */ } S.demOpen.clear(); S.step = 0; if (ROUTES[route()].global) go('visao'); else render(); }
+  if (id === 'fsit') { S.fa.sit = e.target.value; render(); }
+  if (id === 'fresp') { S.fa.resp = e.target.value; render(); }
+  if (id === 'farea') { S.fa.area = e.target.value; render(); }
+  if (id === 'ftipo') { S.fa.tipo = e.target.value; render(); }
+  if (id === 'selP') { S.pessoaSemana = e.target.value; render(); }
+  if (id === 'mCli') { S.modal = { cli: e.target.value, dem: '' }; renderLayer(); }
+}
+
+export function startApp(theStore, context) {
+  st = theStore; ctx = context || {};
+  try { S.cli = localStorage.getItem('gp.cli') || null; } catch (e) { S.cli = null; }
+  shell();
+  document.addEventListener('click', onClick);
+  document.addEventListener('submit', onSubmit);
+  document.addEventListener('input', onInput);
+  document.addEventListener('change', onChange);
+  document.addEventListener('keydown', e => { if (e.key === 'Escape' && (S.drawer || S.modal)) fechar(); });
+  window.addEventListener('hashchange', () => { S.drawer = null; render(); window.scrollTo({ top: 0 }); });
+  window.addEventListener('focus', () => { if (!S.drawer && !S.modal && !S.busy && st.loadedAt && Date.now() - st.loadedAt.getTime() > 180000) recarregar(true); });
+  render();
+}
+export { store };

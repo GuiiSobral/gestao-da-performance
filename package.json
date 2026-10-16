@@ -1,0 +1,18 @@
+{
+  "name": "gestao-da-performance",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Gestão da Performance — Solve Group. Interface web sobre as Listas do SharePoint.",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@azure/msal-browser": "^4.30.0"
+  },
+  "devDependencies": {
+    "vite": "^8.3.4"
+  }
+}
