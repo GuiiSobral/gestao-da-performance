@@ -1,7 +1,7 @@
 // Modelo de dados da Gestão da Performance sobre as 10 listas GP_* e as regras de gravação.
 
 export const AREAS = ['Administrativo', 'Comercial', 'Compras', 'Controladoria', 'Departamento Pessoal', 'Expedição',
-  'Faturamento', 'Financeiro', 'Obras', 'Recursos Humanos', 'Técnico'];
+  'Faturamento', 'Financeiro', 'Fiscal', 'Logística', 'Manutenção', 'Obras', 'Produção', 'Recursos Humanos', 'Técnico', 'Tecnologia'];
 
 export const LISTS = {
   GP_Clientes: ['Title', 'Nome', 'ConsultorCodigo', 'SupervisorCodigo', 'Situacao', 'NaNovaBase', 'PastaSharePoint', 'ArquivoOrigem'],
