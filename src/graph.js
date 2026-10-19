@@ -12,17 +12,19 @@ export class GraphBackend {
     this.lists = {};
   }
 
-  async req(method, url, body, tries = 0) {
-    const token = await this.getToken();
+  async req(method, url, body, tries = 0, renovado = false) {
+    const token = await this.getToken(renovado);
     const r = await fetch(url.startsWith('http') ? url : G + url, {
       method,
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', Accept: 'application/json' },
       body: body ? JSON.stringify(body) : undefined
     });
+    // Token vencido no meio do uso: renova uma vez e repete a mesma chamada.
+    if (r.status === 401 && !renovado) return this.req(method, url, body, tries, true);
     if ((r.status === 429 || r.status === 503 || r.status === 504) && tries < 4) {
       const wait = Number(r.headers.get('Retry-After')) || 2 ** tries;
       await sleep(wait * 1000);
-      return this.req(method, url, body, tries + 1);
+      return this.req(method, url, body, tries + 1, renovado);
     }
     if (!r.ok) {
       let msg = `HTTP ${r.status}`;
@@ -86,13 +88,16 @@ export class MemoryBackend {
   async items(name) {
     return (this.db[name] || []).map(x => ({ id: x.id, modified: x.modified || '2026-01-01T12:00:00Z', fields: { ...x.fields } }));
   }
+  falha() { if (this.failNext) { this.failNext = false; const e = new Error(this.failStatus === 401 ? 'HTTP 401' : 'Falha simulada'); e.status = this.failStatus || 500; throw e; } }
   async create(name, fields) {
+    this.falha();
     const it = { id: String(++this.seq), modified: new Date().toISOString(), fields: { ...fields } };
     (this.db[name] = this.db[name] || []).push(it);
     this.log.push(['create', name, fields]);
     return { ...it, fields: { ...it.fields } };
   }
   async update(name, id, fields) {
+    this.falha();
     const it = (this.db[name] || []).find(x => x.id === id);
     if (!it) throw new Error('Item não encontrado');
     Object.assign(it.fields, fields);

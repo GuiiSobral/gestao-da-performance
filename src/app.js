@@ -1,5 +1,6 @@
 // Interface da Gestão da Performance (mesmas telas do protótipo aprovado), lendo e gravando nas Listas do SharePoint.
 import { AREAS, hojeISO } from './store.js';
+import { aplicarTema, temaHtml } from './theme.js';
 
 let st = null;          // Store
 let ctx = {};           // { logout, listUrl }
@@ -8,13 +9,14 @@ let LIM7 = null;          // definido a cada render (HOJE + 7 dias)
 
 const S = {
   cli: null, fa: { q: '', sit: 'abertas', resp: '', area: '', tipo: '' }, fd: { tipo: 'todas', st: 'abertas' },
-  demOpen: new Set(), step: 0, pessoaSemana: null, drawer: null, modal: null, busy: false, reloading: false
+  demOpen: new Set(), step: 0, pessoaSemana: null, drawer: null, modal: null, busy: false, reloading: false,
+  opener: null, ataDirty: false
 };
 
 /* ---------- utilidades ---------- */
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const fmt = i => (i ? i.slice(8, 10) + '/' + i.slice(5, 7) : '—');
+const fmt = i => (i ? i.slice(8, 10) + '/' + i.slice(5, 7) + (i.slice(0, 4) !== HOJE.slice(0, 4) ? '/' + i.slice(2, 4) : '') : '—');
 const fmtF = i => (i ? fmt(i) + '/' + i.slice(0, 4) : '—');
 const dt = i => new Date(i + 'T12:00:00');
 function addDays(i, n) { const d = dt(i); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10); }
@@ -40,10 +42,16 @@ function situacao(a) {
   return { k: 'good', t: `No prazo · ${fmt(a.prazo)}`, o: 4 };
 }
 const pill = s => `<span class="pill ${s.k}${s.line ? ' line' : ''}">${esc(s.t)}</span>`;
-const dot = (k, t) => `<span class="dot ${k}" role="img" aria-label="${esc(t || '')}" title="${esc(t || '')}"></span>`;
+const SHAPE = {
+  bad: '<circle cx="6" cy="6" r="5.2"/>',
+  warn: '<path d="M6 .8 11.4 10.9H.6Z"/>',
+  good: '<circle cx="6" cy="6" r="5.2"/><path d="M3.4 6.2 5.3 8l3.3-3.6" fill="none" style="stroke:var(--surface)" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>',
+  off: '<circle cx="6" cy="6" r="4.4" fill="none" stroke="currentColor" stroke-width="1.6"/>'
+};
+const dot = (k, t) => `<svg class="dot ${k}" viewBox="0 0 12 12" width="12" height="12" role="img" aria-label="${esc(t || FAROL[k] || '')}"><title>${esc(t || FAROL[k] || '')}</title>${SHAPE[k] || SHAPE.off}</svg>`;
 
 function respHtml(code, apoio) {
-  if (!code) return '<span class="tag bad">sem responsável</span>';
+  if (!code) return '<span class="tag bad">sem dono nominal</span>';
   const p = st.pessoa(code);
   let h = esc(st.nome(code));
   if (p && !p.nominal) h += ' <span class="tag bad">sem dono nominal</span>';
@@ -103,12 +111,20 @@ function sortAcoes(list) {
   });
 }
 
-let toastT;
-function toast(msg, erro) {
-  const t = $('#toast');
-  t.textContent = msg; t.hidden = false; t.classList.toggle('err', !!erro);
-  clearTimeout(toastT); toastT = setTimeout(() => { t.hidden = true; }, erro ? 7000 : 2800);
+let toastT, toastUndo = null, buscaT;
+// Aviso de sucesso (some sozinho; com "Desfazer" fica 6 s) e alerta de erro (fica até a pessoa fechar).
+function toast(msg, erro, undo) {
+  if (erro) {
+    const a = $('#alert');
+    $('#alertMsg').textContent = msg; a.hidden = false;
+    return;
+  }
+  const t = $('#toast'), b = $('#toastAct');
+  $('#toastMsg').textContent = msg; t.hidden = false;
+  toastUndo = undo || null; b.hidden = !undo;
+  clearTimeout(toastT); toastT = setTimeout(() => { t.hidden = true; toastUndo = null; }, undo ? 6000 : 2800);
 }
+function fecharToast() { clearTimeout(toastT); $('#toast').hidden = true; toastUndo = null; }
 async function copiar(text, el) {
   try { await navigator.clipboard.writeText(text); toast('Texto copiado'); }
   catch (e) { if (el) { el.focus(); el.select(); } toast('Selecionei o texto: use Ctrl+C para copiar'); }
@@ -123,7 +139,34 @@ const ROUTES = {
   forum: { t: 'Fórum de gestão', r: renderForum },
   semana: { t: 'Minha semana', r: renderSemana, global: true }
 };
-const route = () => { const h = (location.hash || '').replace('#', ''); return ROUTES[h] ? h : 'visao'; };
+// Endereço = tela + filtros (ex.: #acoes?cli=MOE&sit=vencidas). O Voltar do navegador funciona e o link pode ser enviado.
+const parseHash = () => {
+  const h = (location.hash || '').replace(/^#/, ''), i = h.indexOf('?');
+  const r = i < 0 ? h : h.slice(0, i);
+  return { r: ROUTES[r] ? r : 'visao', p: new URLSearchParams(i < 0 ? '' : h.slice(i + 1)) };
+};
+const route = () => parseHash().r;
+const FA0 = { q: '', sit: 'abertas', resp: '', area: '', tipo: '' }, FD0 = { tipo: 'todas', st: 'abertas' };
+function hashDe(r) {
+  const p = new URLSearchParams();
+  if (!ROUTES[r].global && S.cli) p.set('cli', S.cli);
+  if (r === 'acoes') for (const k of Object.keys(FA0)) { if (S.fa[k] && S.fa[k] !== FA0[k]) p.set(k, S.fa[k]); }
+  if (r === 'demandas') { if (S.fd.tipo !== FD0.tipo) p.set('tipo', S.fd.tipo); if (S.fd.st !== FD0.st) p.set('st', S.fd.st); }
+  if (r === 'forum' && S.step) p.set('passo', String(S.step + 1));
+  if (r === 'semana' && S.pessoaSemana) p.set('p', S.pessoaSemana);
+  const q = p.toString();
+  return '#' + r + (q ? '?' + q : '');
+}
+function lerHash() {
+  const { r, p } = parseHash();
+  if (p.get('cli')) S.cli = p.get('cli');
+  if (r === 'acoes') S.fa = Object.fromEntries(Object.keys(FA0).map(k => [k, p.get(k) || FA0[k]]));
+  if (r === 'demandas') S.fd = { tipo: p.get('tipo') || FD0.tipo, st: p.get('st') || FD0.st };
+  if (r === 'forum') { const n = Number(p.get('passo')); S.step = n >= 1 && n <= 5 ? n - 1 : S.step; }
+  if (r === 'semana' && p.get('p')) S.pessoaSemana = p.get('p');
+}
+// Atualiza o endereço sem criar uma entrada nova no histórico (usado ao mexer em filtros).
+function syncHash() { const h = hashDe(route()); if (location.hash !== h) history.replaceState(null, '', h); }
 
 function shell() {
   $('#root').innerHTML = `
@@ -132,8 +175,8 @@ function shell() {
       <div class="brand"><b>Gestão da Performance</b><span>Solve Group</span></div>
       <nav class="nav" id="nav" aria-label="Seções">
         <a href="#carteira" data-r="carteira">Carteira</a>
-        <div class="grp label">Cliente</div>
-        <label class="clisel"><span class="sr">Cliente</span><select id="selCli"></select></label>
+        <div class="grp label" id="grpCli">Cliente</div>
+        <label class="clisel" id="cliWrap"><span class="sr">Cliente</span><select id="selCli"></select></label>
         <a href="#visao" data-r="visao">Visão geral</a>
         <a href="#demandas" data-r="demandas">Demandas</a>
         <a href="#acoes" data-r="acoes">Ações <span class="cnt" id="cntAb"></span></a>
@@ -146,7 +189,7 @@ function shell() {
     <main>
       <div class="top">
         <div class="ttl"><div class="label" id="eyebrow"></div><h1 id="ttl"></h1></div>
-        <div class="chips"><button class="btn" data-do="recarregar" id="btnSync" title="Ler de novo as listas do SharePoint">Atualizar</button><button class="btn primary" data-do="capturar">+ Nova ação</button></div>
+        <div class="chips"><details class="acct" id="acct"><summary class="btn">Conta</summary><div class="acct-menu" id="acctMenu"></div></details><button class="btn" data-do="recarregar" id="btnSync" title="Ler de novo as listas do SharePoint">Atualizar</button><button class="btn primary" data-do="capturar">+ Nova ação</button></div>
       </div>
       <div id="view" class="view"></div>
     </main>
@@ -160,22 +203,27 @@ function render() {
   if (!S.cli || !st.cliente(S.cli)) S.cli = (comDados[0] || st.clientes[0] || {}).id || null;
   const sel = $('#selCli');
   sel.innerHTML = clientesOrd().map(c => `<option value="${esc(c.id)}"${c.id === S.cli ? ' selected' : ''}>${esc(c.nome)}${st.temDados(c.id) ? '' : ' (a migrar)'}</option>`).join('');
+  $('#cliWrap').hidden = !!R.global; $('#grpCli').hidden = !!R.global; sel.disabled = !!R.global;
   $('#eyebrow').textContent = R.global ? 'Solve Group' : cliNome(S.cli);
   $('#ttl').textContent = R.t;
   document.querySelectorAll('#nav a').forEach(a => { if (a.dataset.r === r) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); });
   $('#cntAb').textContent = S.cli ? M(acoesC(S.cli)).ab : '';
   const eu = st.eu();
   const hora = st.loadedAt ? st.loadedAt.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '—';
-  $('#railnote').innerHTML = `<b>${esc(st.user.name || '')}</b>${eu ? '' : '<span class="small">sem cadastro em Pessoas</span>'}
+  const conta = suf => `<b>${esc(st.user.name || '')}</b>${eu ? '' : '<span class="small">sem cadastro em Pessoas</span>'}
     <span>Dados do SharePoint lidos às ${hora}</span>
-    <span class="row-actions">${ctx.listUrl ? `<a class="btn sm ghost" href="${esc(ctx.listUrl)}" target="_blank" rel="noopener">Listas</a>` : ''}${ctx.logout ? '<button class="btn sm ghost" data-do="sair">Sair</button>' : ''}</span>`;
+    <span class="label">Tema</span>${temaHtml(suf)}
+    <span class="row-actions">${ctx.listUrl ? `<a class="btn sm ghost" href="${esc(ctx.listUrl)}" target="_blank" rel="noopener">Listas no SharePoint</a>` : ''}${ctx.logout ? '<button class="btn sm ghost" data-do="sair">Sair</button>' : ''}</span>`;
+  $('#railnote').innerHTML = conta('rail');
+  $('#acctMenu').innerHTML = conta('menu');
   const focused = document.activeElement && document.activeElement.id;
   const pos = focused === 'fq' ? document.activeElement.selectionStart : null;
   $('#view').innerHTML = R.r();
+  syncHash();
   if (focused === 'fq') { const i = $('#fq'); if (i) { i.focus(); i.setSelectionRange(pos, pos); } }
   renderLayer();
 }
-function go(r) { if (location.hash === '#' + r) render(); else location.hash = r; }
+function go(r) { const h = hashDe(r); if (location.hash === h) render(); else location.hash = h.slice(1); }
 
 /* ---------- Carteira ---------- */
 function renderCarteira() {
@@ -184,24 +232,25 @@ function renderCarteira() {
   const mt = M(todas);
   const rows = cart.map(c => {
     if (!st.temDados(c.id)) return `<tr class="dim"><td><span class="sem" aria-hidden="true"><i></i><i></i><i></i></span></td>
-      <td><b>${esc(c.nome)}</b><span class="sub mono">${esc(c.arquivo || 'Planilha ainda não mapeada')}</span></td><td colspan="5"><span class="pill ok">Aguardando migração</span></td></tr>`;
+      <td><b>${esc(c.nome)}</b><span class="sub mono">${esc(c.arquivo || 'Planilha ainda não mapeada')}</span></td><td colspan="5"><span class="pill ok line">Aguardando migração</span></td></tr>`;
     const m = M(acoesC(c.id));
     const sp = semPlano(c.id).length;
     const fr = m.venc || sp ? 'bad' : (m.semp || m.v7) ? 'warn' : 'good';
     return `<tr class="click" data-cli-go="${esc(c.id)}"><td><span class="sem" role="img" aria-label="${FAROL[fr]}"><i class="${fr === 'bad' ? 'on bad' : ''}"></i><i class="${fr === 'warn' ? 'on warn' : ''}"></i><i class="${fr === 'good' ? 'on good' : ''}"></i></span></td>
-      <td><b>${esc(c.nome)}</b><span class="sub">${c.consultor ? 'Consultor: ' + esc(st.nome(c.consultor)) : 'Sem consultor definido'}${c.supervisor ? ' · supervisão: ' + esc(st.nome(c.supervisor)) : ''}</span></td>
+      <td><button class="linkbtn" data-cli-go="${esc(c.id)}">${esc(c.nome)}</button><span class="sub">${c.consultor ? 'Consultor: ' + esc(st.nome(c.consultor)) : 'Sem consultor definido'}${c.supervisor ? ' · supervisão: ' + esc(st.nome(c.supervisor)) : ''}</span></td>
       <td class="num">${m.ab}</td><td class="num" style="color:var(--bad);font-weight:600">${m.venc}</td><td class="num">${m.semp}</td><td class="num">${m.semDono}</td><td class="num">${sp}</td></tr>`;
   }).join('');
   const exc = cart.filter(c => st.temDados(c.id)).flatMap(c => excecoes(c.id).map(e => ({ ...e, cli: c.id })));
   return `
-  <div class="strip" style="grid-template-columns:repeat(4,minmax(0,1fr))">
-    <button data-go="carteira"><span class="v">${cart.length}</span><span class="k">Clientes na carteira</span></button>
-    <button data-go="carteira"><span class="v">${cart.filter(c => st.temDados(c.id)).length}<span class="muted" style="font-size:1rem"> / ${cart.length}</span></span><span class="k">Na nova base</span></button>
-    <button data-go="carteira"><span class="v">${mt.ab}</span><span class="k">Ações abertas</span></button>
-    <button class="bad" data-go="carteira"><span class="v">${mt.venc}</span><span class="k">Vencidas</span></button>
+  <div class="strip static s4">
+    <div><span class="v">${cart.length}</span><span class="k">Clientes na carteira</span></div>
+    <div><span class="v">${cart.filter(c => st.temDados(c.id)).length}<span class="muted" style="font-size:1rem"> / ${cart.length}</span></span><span class="k">Na nova base</span></div>
+    <div><span class="v">${mt.ab}</span><span class="k">Ações abertas</span></div>
+    <div class="bad"><span class="v">${mt.venc}</span><span class="k">Vencidas</span></div>
   </div>
+  <p class="small muted" style="margin:-10px 0 0">Para ver as ações de um cliente, clique no nome dele na tabela.</p>
   <div class="tablewrap"><table>
-    <thead><tr><th style="width:1%">Farol</th><th>Cliente</th><th>Abertas</th><th>Vencidas</th><th>Sem prazo</th><th>Sem dono</th><th>Sem plano</th></tr></thead>
+    <thead><tr><th style="width:1%">Farol</th><th>Cliente</th><th>Abertas</th><th>Vencidas</th><th>Sem prazo</th><th>Sem dono nominal</th><th>Sem plano</th></tr></thead>
     <tbody>${rows}</tbody></table></div>
   <section class="panel">
     <header><h2>Exceções que pedem decisão</h2><span class="small muted">gestão por exceção: só o que saiu da regra</span></header>
@@ -217,8 +266,8 @@ function excecoes(cli) {
   const velhas = ab.filter(a => a.prazo && diff(HOJE, a.prazo) > 90);
   if (velhas.length) out.push({ k: 'bad', t: `${velhas.length} ${plural(velhas.length, 'ação vencida', 'ações vencidas')} há mais de 90 dias`, m: velhas.map(a => a.acao).slice(0, 3).join(' · '), attr: 'data-sig="vencidas"' });
   const rep = ab.filter(a => a.reprogramacoes.length && a.prazo && a.prazo < HOJE);
-  if (rep.length) out.push({ k: 'bad', t: `${rep.length} ${plural(rep.length, 'ação repactuada venceu', 'ações repactuadas venceram')} de novo`, m: 'levar ao fórum', attr: 'data-sig="repact"' });
-  demandasC(cli).filter(d => infoDem(d).status === 'Sem plano de ação').forEach(d => out.push({ k: 'bad', t: `Sem plano de ação: ${d.titulo}`, m: d.resp ? 'responsável ' + st.nome(d.resp) : 'sem responsável', attr: `data-dem-go="${esc(d.id)}"` }));
+  if (rep.length) out.push({ k: 'bad', t: `${rep.length} ${plural(rep.length, 'ação reprogramada venceu', 'ações reprogramadas venceram')} de novo`, m: 'levar ao fórum', attr: 'data-sig="repact"' });
+  demandasC(cli).filter(d => infoDem(d).status === 'Sem plano de ação').forEach(d => out.push({ k: 'bad', t: `Sem plano de ação: ${d.titulo}`, m: d.resp ? 'responsável ' + st.nome(d.resp) : 'sem dono nominal', attr: `data-dem-go="${esc(d.id)}"` }));
   frentesC(cli).filter(f => infoFr(f).status === 'Sem plano ativo').forEach(f => out.push({ k: 'bad', t: `Frente sem plano ativo: ${f.nome}`, m: f.nota || 'nenhuma ação aberta', attr: 'data-go="visao"' }));
   const val = demandasC(cli).filter(d => infoDem(d).validar);
   if (val.length) out.push({ k: 'warn', t: `${val.length} ${plural(val.length, 'demanda com todas as ações fechadas', 'demandas com todas as ações fechadas')}`, m: 'validar o encerramento', attr: 'data-go="demandas" data-fd="validar"' });
@@ -273,12 +322,12 @@ function renderVisao() {
     <section class="panel"><header><h2>Questões críticas</h2><span class="small muted">por prioridade definida no fórum</span></header>
       ${qcs.length ? `<div class="list">${qcs.map(({ d, i }) => `<div class="li">${dot(i.farol, FAROL[i.farol])}<div class="body">
         <button class="linkbtn" data-dem-go="${esc(d.id)}">${d.prioridade ? `<span class="prio">P${d.prioridade}</span> ` : ''}${esc(d.titulo)}</button>
-        <div class="meta"><span>${d.resp ? esc(st.nome(d.resp)) : 'sem responsável'}</span><span>${i.ab.length} ${plural(i.ab.length, 'ação aberta', 'ações abertas')}</span>${i.venc ? `<span style="color:var(--bad)">${i.venc} ${plural(i.venc, 'vencida', 'vencidas')}</span>` : ''}${i.status === 'Sem plano de ação' ? '<span class="pill bad">sem plano de ação</span>' : ''}${i.validar ? '<span class="pill acc">validar encerramento</span>' : ''}</div></div></div>`).join('')}</div>` : '<div class="empty small">Nenhuma questão crítica aberta.</div>'}
+        <div class="meta"><span>${d.resp ? esc(st.nome(d.resp)) : 'sem dono nominal'}</span><span>${i.ab.length} ${plural(i.ab.length, 'ação aberta', 'ações abertas')}</span>${i.venc ? `<span style="color:var(--bad)">${i.venc} ${plural(i.venc, 'vencida', 'vencidas')}</span>` : ''}${i.status === 'Sem plano de ação' ? '<span class="pill bad">sem plano de ação</span>' : ''}${i.validar ? '<span class="pill acc">validar encerramento</span>' : ''}</div></div></div>`).join('')}</div>` : '<div class="empty small">Nenhuma questão crítica aberta.</div>'}
     </section>
     <div class="stack">
       <section class="panel"><header><h2>Sinais de gestão</h2></header>
         <div class="signals">
-          <button class="signal" data-sig="repact"><b style="color:var(--bad)">${m.repVenc}</b><span>${plural(m.repVenc, 'ação repactuada venceu de novo', 'ações repactuadas venceram de novo')}</span></button>
+          <button class="signal" data-sig="repact"><b style="color:var(--bad)">${m.repVenc}</b><span>${plural(m.repVenc, 'ação reprogramada venceu de novo', 'ações reprogramadas venceram de novo')}</span></button>
           ${pf ? `<button class="signal" data-sig="solvefez"><b>${pf}</b><span>${plural(pf, 'ação cancelada porque', 'ações canceladas porque')} a Solve executou a tarefa do cliente</span></button>` : ''}
           <button class="signal" data-go="demandas" data-fd="semplano"><b style="color:var(--bad)">${sp}</b><span>demandas e frentes sem plano de ação ativo</span></button>
           <button class="signal" data-go="demandas" data-fd="validar"><b>${nval}</b><span>${plural(nval, 'demanda com todas as ações fechadas, para validar o encerramento', 'demandas com todas as ações fechadas, para validar o encerramento')}</span></button>
@@ -347,7 +396,7 @@ function demRow(d, i) {
   return `<div class="dem" id="dem-${esc(d.id)}">
     <button data-dem="${esc(d.id)}" aria-expanded="${open}">${dot(i.farol, FAROL[i.farol])}
       <span style="min-width:0"><span class="t">${d.prioridade ? `<span class="prio">P${d.prioridade}</span> ` : ''}${esc(d.titulo)}</span>
-        <span class="m"><span class="tag">${esc(d.tipo)}</span>${fr ? `<span>${esc(fr.nome)}</span>` : ''}<span>${d.resp ? esc(st.nome(d.resp)) : '<b style="color:var(--bad)">sem responsável</b>'}</span>
+        <span class="m"><span class="tag">${esc(d.tipo)}</span>${fr ? `<span>${esc(fr.nome)}</span>` : ''}<span>${d.resp ? esc(st.nome(d.resp)) : '<b style="color:var(--bad)">sem dono nominal</b>'}</span>
         ${i.ac.length ? `<span>${i.conc}/${naoCanc} concluídas</span>` : ''}${i.venc ? `<span style="color:var(--bad);font-weight:600">${i.venc} ${plural(i.venc, 'vencida', 'vencidas')}</span>` : ''}${i.semp ? `<span style="color:var(--warn)">${i.semp} sem prazo</span>` : ''}
         ${d.nota ? '<span class="pill warn">nota da migração</span>' : ''}</span></span>
       <span class="r">${stPill}</span>
@@ -355,7 +404,7 @@ function demRow(d, i) {
     ${open ? `<div class="open">
       ${notas.length ? `<div class="note"><b>O que a migração encontrou</b><ul>${notas.map(x => `<li>${esc(x)}</li>`).join('')}</ul></div>` : ''}
       <div class="small muted"><span class="mono">${esc(d.id)}</span>${d.origem ? ' · origem: ' + esc(d.origem) : ''}${d.prazo ? ` · prazo da demanda: ${fmt(d.prazo)}` : ''}${d.encerrada && d.dataEnc ? ` · encerrada em ${fmtF(d.dataEnc)}` : ''}</div>
-      ${i.ac.length ? `<div style="overflow-x:auto"><table class="mini"><tbody>${sortAcoes(i.ac).map(a => `<tr data-acao="${esc(a.id)}"><td class="c-id">${esc(a.id)}</td><td>${esc(a.acao)}</td><td class="c-nw">${esc(st.nome(a.resp) || '—')}</td><td class="c-nw">${pill(situacao(a))}</td></tr>`).join('')}</tbody></table></div>` : ''}
+      ${i.ac.length ? `<div style="overflow-x:auto"><table class="mini"><tbody>${sortAcoes(i.ac).map(a => `<tr data-acao="${esc(a.id)}"><td class="c-id">${esc(a.id)}</td><td><button class="linkbtn plain" data-acao="${esc(a.id)}">${esc(a.acao)}</button></td><td class="c-nw">${esc(st.nome(a.resp) || '—')}</td><td class="c-nw">${pill(situacao(a))}</td></tr>`).join('')}</tbody></table></div>` : ''}
       <div class="row-actions">${i.aberta ? `<button class="btn sm" data-do="capturar" data-dem-pre="${esc(d.id)}">+ ${i.ac.length ? 'Nova ação nesta demanda' : 'Criar a primeira ação'}</button>` : ''}
         ${i.validar ? `<button class="btn sm primary" data-do="encerrarDem" data-id="${esc(d.id)}">Confirmar encerramento</button>` : ''}</div>
     </div>` : ''}
@@ -363,7 +412,7 @@ function demRow(d, i) {
 }
 
 /* ---------- Ações ---------- */
-const SIT = [['abertas', 'Abertas'], ['vencidas', 'Vencidas'], ['v7', 'Vencem em 7 dias'], ['semprazo', 'Sem prazo'], ['semdono', 'Sem dono nominal'], ['repact', 'Repactuadas e vencidas'], ['solvefez', 'Canceladas: Solve executou'], ['concluidas', 'Concluídas'], ['canceladas', 'Canceladas'], ['todas', 'Todas']];
+const SIT = [['abertas', 'Abertas'], ['vencidas', 'Vencidas'], ['v7', 'Vencem em 7 dias'], ['semprazo', 'Sem prazo'], ['semdono', 'Sem dono nominal'], ['repact', 'Reprogramadas e vencidas'], ['solvefez', 'Canceladas: Solve executou'], ['concluidas', 'Concluídas'], ['canceladas', 'Canceladas'], ['todas', 'Todas']];
 function filtraAcoes() {
   const f = S.fa, q = f.q.trim().toLowerCase();
   return sortAcoes(acoesC(S.cli).filter(a => {
@@ -404,15 +453,15 @@ function renderAcoes() {
     <select id="ftipo" aria-label="Tipo de demanda">${opt('', f.tipo, 'Todos os tipos')}${tipos.map(r => opt(r, f.tipo, r)).join('')}</select>
   </div>
   <div class="small muted">${list.length} ${plural(list.length, 'ação', 'ações')} · ordenadas pela urgência: vencidas primeiro, pelo maior atraso</div>
-  <div class="tablewrap"><table>
+  <div class="tablewrap"><table class="cards">
     <thead><tr><th>Código</th><th>Ação</th><th>Demanda</th><th>Responsável</th><th>Prazo</th><th>Situação</th></tr></thead>
     <tbody>${list.length ? list.map(a => { const d = st.demanda(a.demanda); return `<tr class="click" data-acao="${esc(a.id)}">
-      <td class="c-id">${esc(a.id)}</td>
-      <td style="min-width:240px">${esc(a.acao)}${a.reprogramacoes.length ? `<span class="sub">${a.reprogramacoes.length}ª reprogramação · prazo original ${fmt(a.prazoOriginal)}</span>` : ''}</td>
-      <td style="min-width:180px">${esc(d ? d.titulo : a.demanda)}<span class="sub">${esc(d ? d.tipo : '')}</span></td>
-      <td class="c-nw">${respHtml(a.resp)}</td>
-      <td class="num c-nw">${fmt(a.prazo)}</td>
-      <td class="c-nw">${pill(situacao(a))}</td></tr>`; }).join('') : '<tr><td colspan="6"><div class="empty">Nenhuma ação com esses filtros.</div></td></tr>'}</tbody></table></div>`;
+      <td class="c-id" data-l="Código">${esc(a.id)}</td>
+      <td class="c-main" style="min-width:240px"><button class="linkbtn plain" data-acao="${esc(a.id)}">${esc(a.acao)}</button>${a.reprogramacoes.length ? `<span class="sub">${a.reprogramacoes.length}ª reprogramação · prazo original ${fmt(a.prazoOriginal)}</span>` : ''}</td>
+      <td data-l="Demanda" style="min-width:180px">${esc(d ? d.titulo : a.demanda)}<span class="sub">${esc(d ? d.tipo : '')}</span></td>
+      <td class="c-nw" data-l="Responsável">${respHtml(a.resp)}</td>
+      <td class="num c-nw" data-l="Prazo">${fmt(a.prazo)}</td>
+      <td class="c-nw" data-l="Situação">${pill(situacao(a))}</td></tr>`; }).join('') : '<tr class="noc"><td colspan="6"><div class="empty">Nenhuma ação com esses filtros.</div></td></tr>'}</tbody></table></div>`;
 }
 
 /* ---------- Fórum ---------- */
@@ -433,7 +482,7 @@ function renderForum() {
   const fo = st.forumDeHoje(S.cli);
   const head = `<p class="lede-sub" style="margin:0">Pauta do fórum: painel, pendências e questões críticas. Tudo o que você muda aqui grava na hora no SharePoint e entra na ata.</p>
   <nav class="stepper" aria-label="Pauta">${STEPS.map((s, k) => `<button data-step="${k}" ${k === step ? 'aria-current="step"' : ''}><span class="h">passo ${k + 1}</span><span class="s">${s}</span></button>`).join('')}</nav>
-  ${(h.concl.length + h.reprog.length + h.canc.length + h.novas.length + h.delib.length) ? `<div class="kv"><span class="label" style="align-self:center">Hoje</span><span><b>${h.concl.length}</b> concluídas</span><span><b>${h.reprog.length}</b> repactuadas</span><span><b>${h.canc.length}</b> canceladas</span><span><b>${h.novas.length}</b> novas</span><span><b>${h.delib.length}</b> deliberações</span>${fo && fo.ata ? '<span class="pill good">ata salva</span>' : ''}</div>` : ''}`;
+  ${(h.concl.length + h.reprog.length + h.canc.length + h.novas.length + h.delib.length) ? `<div class="kv"><span class="label" style="align-self:center">Hoje</span><span><b>${h.concl.length}</b> concluídas</span><span><b>${h.reprog.length}</b> reprogramadas</span><span><b>${h.canc.length}</b> canceladas</span><span><b>${h.novas.length}</b> novas</span><span><b>${h.delib.length}</b> deliberações</span>${fo && fo.ata ? '<span class="pill good">ata salva</span>' : ''}</div>` : ''}`;
   let body = '';
   if (step === 0) {
     const m = M(acoesC(S.cli));
@@ -443,7 +492,7 @@ function renderForum() {
       <button class="bad" data-sig="vencidas"><span class="v">${m.venc}</span><span class="k">Vencidas</span></button>
       <button class="warn" data-sig="v7"><span class="v">${m.v7}</span><span class="k">Vencem em 7 dias</span></button>
       <button class="warn" data-sig="semprazo"><span class="v">${m.semp}</span><span class="k">Sem prazo</span></button>
-      <button data-sig="semdono"><span class="v">${m.semDono}</span><span class="k">Sem dono</span></button>
+      <button class="${m.semDono ? 'warn' : ''}" data-sig="semdono"><span class="v">${m.semDono}</span><span class="k">Sem dono nominal</span></button>
       <button data-sig="concluidas"><span class="v">${m.conc}</span><span class="k">Concluídas</span></button></div>
       <section class="panel"><header><h2>Frentes em vermelho</h2><span class="small muted">${frs.length} de ${frentesC(S.cli).length}</span></header>
       ${frs.length ? `<div class="list">${frs.map(({ f, i }) => `<div class="li">${dot('bad')}<div class="body"><b>${esc(f.nome)}</b><div class="meta"><span>${esc(st.nome(f.dono))}</span><span>${i.status === 'Sem plano ativo' ? 'sem plano ativo' : `${i.venc} ${plural(i.venc, 'ação vencida', 'ações vencidas')}`}</span>${i.atrasada ? `<span>fim previsto ${fmt(f.fim)}</span>` : ''}</div></div></div>`).join('')}</div>` : '<div class="empty small">Nenhuma frente em vermelho.</div>'}</section>
@@ -464,7 +513,7 @@ function renderForum() {
   } else if (step === 2) {
     const qcs = demandasC(S.cli).filter(d => d.tipo === 'Questão crítica').map(d => ({ d, i: infoDem(d) })).filter(x => x.i.aberta)
       .sort((a, b) => (a.d.prioridade || 99) - (b.d.prioridade || 99) || SEV[a.i.farol] - SEV[b.i.farol]);
-    body = `${qcs.length ? qcs.map(({ d, i }) => `<div class="qc"><header>${dot(i.farol, FAROL[i.farol])}${d.prioridade ? `<span class="prio">P${d.prioridade}</span>` : ''}<h3>${esc(d.titulo)}</h3><span class="small muted">${d.resp ? esc(st.nome(d.resp)) : 'sem responsável'}</span>${i.validar ? '<span class="pill acc">validar encerramento</span>' : ''}</header>
+    body = `${qcs.length ? qcs.map(({ d, i }) => `<div class="qc"><header>${dot(i.farol, FAROL[i.farol])}${d.prioridade ? `<span class="prio">P${d.prioridade}</span>` : ''}<h3>${esc(d.titulo)}</h3><span class="small muted">${d.resp ? esc(st.nome(d.resp)) : 'sem dono nominal'}</span>${i.validar ? '<span class="pill acc">validar encerramento</span>' : ''}</header>
       ${i.ab.length ? quickTable(sortAcoes(i.ab)) : i.validar ? `<div class="row-actions"><span class="small">Todas as ações foram concluídas. Se o fórum confirmar, a questão sai da pauta.</span><button class="btn sm primary" data-do="encerrarDem" data-id="${esc(d.id)}">Confirmar encerramento</button></div>` : `<div class="row-actions"><span class="pill bad">Sem plano de ação</span><button class="btn sm" data-do="capturar" data-dem-pre="${esc(d.id)}">+ Criar ação</button></div>`}</div>`).join('') : '<div class="empty">Nenhuma questão crítica aberta.</div>'}
       <div><button class="btn primary" data-step="3">Seguir para deliberações</button></div>`;
   } else if (step === 3) {
@@ -475,7 +524,7 @@ function renderForum() {
       <form id="fDelib" class="form">
         <div class="field full"><label for="dTexto">O que foi decidido</label><textarea id="dTexto" required placeholder="Ex.: Financeiro envia a conciliação de setembro até sexta"></textarea></div>
         <div class="field"><label for="dTipo">Tipo</label><select id="dTipo"><option>Deliberado</option><option>Encaminhamento</option><option>Informativo</option></select></div>
-        <div class="field"><label for="dDem">Demanda relacionada</label><select id="dDem"><option value="">Nenhuma (cria uma pendência)</option>${dems.map(d => `<option value="${esc(d.id)}">${esc(d.titulo)}</option>`).join('')}</select></div>
+        <div class="field"><label for="dDem">Demanda relacionada</label><select id="dDem"><option value="" id="dDemNone">Nenhuma (a ação gerada cria uma pendência nova)</option>${dems.map(d => `<option value="${esc(d.id)}">${esc(d.titulo)}</option>`).join('')}</select></div>
         <div class="field"><label for="dResp">Responsável</label><select id="dResp"><option value="">Escolha</option>${pes.map(p => `<option value="${esc(p.id)}">${esc(p.nome)}${p.empresa === 'Solve' ? ' (Solve)' : ''}</option>`).join('')}</select></div>
         <div class="field"><label for="dPrazo">Prazo</label><input type="date" id="dPrazo" min="${HOJE}"></div>
         <div class="field full"><label class="check"><input type="checkbox" id="dGera" checked> Gerar ação no plano com esse responsável e prazo</label></div>
@@ -489,14 +538,18 @@ function renderForum() {
     body = `<section class="panel"><header><h2>Ata para o grupo do WhatsApp</h2><span class="row-actions"><button class="btn sm" data-do="gerarAta">Gerar de novo</button><button class="btn sm" data-do="copiarAta">Copiar texto</button></span></header>
       <div class="field" style="margin-bottom:10px"><label for="ataPart">Participantes</label><input id="ataPart" value="${esc(part)}" placeholder="Nomes de quem participou, separados por vírgula"></div>
       <textarea class="out" id="ataTxt" aria-label="Ata">${esc(texto)}</textarea>
-      <div class="row-actions" style="margin-top:10px"><button class="btn primary" data-do="salvarAta">Salvar ata no SharePoint</button><span class="small muted">${fo && fo.ata ? `Ata de hoje salva em ${esc(fo.id)}.` : 'A ata fica no histórico de fóruns do cliente.'}</span></div>
+      <div class="row-actions" style="margin-top:10px;align-items:center"><button class="btn primary" data-do="salvarAta">Salvar ata no SharePoint</button><span class="small" id="ataEstado">${ataEstado(fo)}</span></div>
       </section>`;
   }
   return head + body;
 }
+function ataEstado(fo) {
+  if (S.ataDirty) return '<span class="pill warn">Rascunho não salvo</span> <span class="muted">fica guardado enquanto o app estiver aberto</span>';
+  return `<span class="muted">${fo && fo.ata ? `Ata de hoje salva em ${esc(fo.id)}.` : 'A ata fica no histórico de fóruns do cliente.'}</span>`;
+}
 function quickTable(l, showCli) {
-  return `<div style="overflow-x:auto"><table class="mini"><tbody>${l.map(a => { const d = st.demanda(a.demanda); return `<tr data-acao="${esc(a.id)}"><td class="c-id">${esc(a.id)}</td><td style="min-width:220px">${showCli ? `<span class="tag">${esc(a.cli)}</span> ` : ''}${esc(a.acao)}<span class="sub" style="display:block;color:var(--muted);font-size:.8rem">${esc(d ? d.titulo : '')}${a.reprogramacoes.length >= 2 ? ` · ${a.reprogramacoes.length}ª reprogramação` : ''}</span></td><td class="c-nw">${esc(st.nome(a.resp))}</td><td class="c-nw">${pill(situacao(a))}</td>
-    <td class="c-nw" style="text-align:right"><span class="row-actions" style="justify-content:flex-end"><button class="btn sm" data-q="concluir" data-id="${esc(a.id)}">Concluída</button><button class="btn sm" data-q="reprog" data-id="${esc(a.id)}">${a.prazo ? 'Novo prazo' : 'Definir prazo'}</button></span></td></tr>`; }).join('')}</tbody></table></div>`;
+  return `<div style="overflow-x:auto"><table class="mini cards"><tbody>${l.map(a => { const d = st.demanda(a.demanda); return `<tr data-acao="${esc(a.id)}"><td class="c-id">${esc(a.id)}</td><td class="c-main" style="min-width:220px">${showCli ? `<span class="tag">${esc(a.cli)}</span> ` : ''}<button class="linkbtn plain" data-acao="${esc(a.id)}">${esc(a.acao)}</button><span class="sub" style="display:block;color:var(--muted);font-size:.8rem">${esc(d ? d.titulo : '')}${a.reprogramacoes.length >= 2 ? ` · ${a.reprogramacoes.length}ª reprogramação` : ''}</span></td><td class="c-nw">${esc(st.nome(a.resp))}</td><td class="c-nw">${pill(situacao(a))}</td>
+    <td class="c-nw c-act" style="text-align:right"><span class="row-actions" style="justify-content:flex-end"><button class="btn sm" data-q="concluir" data-id="${esc(a.id)}">Concluir</button><button class="btn sm" data-q="reprog" data-id="${esc(a.id)}">${a.prazo ? 'Novo prazo' : 'Definir prazo'}</button></span></td></tr>`; }).join('')}</tbody></table></div>`;
 }
 function ata(cli) {
   const m = M(acoesC(cli)), h = hojeNoCliente(cli), L = [];
@@ -560,11 +613,43 @@ function cobranca(p, sec, varios) {
 }
 
 /* ---------- gaveta e janela ---------- */
+// Gaveta e janela: foco preso dentro enquanto abertas, fundo inerte e foco devolvido a quem abriu.
+const FOCAVEIS = 'button:not([disabled]),[href],input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])';
+function lembrar(el) {
+  if (!el || el === document.body) return null;
+  const b = el.closest('[data-acao],[data-do],[data-q]');
+  let sel = null;
+  if (b && b.dataset.acao) sel = `button[data-acao="${CSS.escape(b.dataset.acao)}"]`;
+  else if (b && b.dataset.q) sel = `[data-q="${CSS.escape(b.dataset.q)}"][data-id="${CSS.escape(b.dataset.id || '')}"]`;
+  else if (b && b.dataset.do) sel = `[data-do="${CSS.escape(b.dataset.do)}"]`;
+  return { el, sel };
+}
 function renderLayer() {
-  const L = $('#layer');
+  const L = $('#layer'), aberto = !!(S.drawer || S.modal);
+  const dentro = L.contains(document.activeElement), prevId = dentro ? document.activeElement.id : null;
+  if (aberto && !S.opener) S.opener = lembrar(document.activeElement);
   if (S.drawer) L.innerHTML = `<div class="scrim" data-do="fechar"></div>${drawerHtml()}`;
   else if (S.modal) L.innerHTML = `<div class="scrim" data-do="fechar"></div>${modalHtml()}`;
   else L.innerHTML = '';
+  const root = $('#root'); if (root) root.inert = aberto;
+  if (aberto) {
+    const dlg = L.querySelector('[role="dialog"]');
+    const el = (prevId && document.getElementById(prevId)) || (dlg && dlg.querySelector('h2[tabindex]'));
+    if (el && !(dentro && document.activeElement === el)) el.focus();
+  } else if (S.opener) {
+    const o = S.opener; S.opener = null;
+    const el = (o.el && o.el.isConnected && o.el) || (o.sel && document.querySelector(o.sel));
+    if (el) el.focus();
+  }
+}
+function prenderFoco(e) {
+  const dlg = $('#layer [role="dialog"]');
+  if (!dlg) return;
+  const f = [...dlg.querySelectorAll(FOCAVEIS)].filter(x => x.offsetParent !== null);
+  if (!f.length) return;
+  const first = f[0], last = f[f.length - 1];
+  if (e.shiftKey && (document.activeElement === first || !dlg.contains(document.activeElement))) { e.preventDefault(); last.focus(); }
+  else if (!e.shiftKey && (document.activeElement === last || !dlg.contains(document.activeElement))) { e.preventDefault(); first.focus(); }
 }
 function drawerHtml() {
   const { id, modo } = S.drawer, a = st.acao(id);
@@ -584,7 +669,7 @@ function drawerHtml() {
       <div class="field full"><label for="cMot">Por que cancelar?</label><input type="text" id="cMot" required placeholder="Ex.: substituída por outra ação"></div>
       <div class="full row-actions"><button class="btn danger" type="submit">Cancelar ação</button><button class="btn" type="button" data-do="modo" data-m="">Voltar</button><span class="small err-text" id="cErr" role="alert"></span></div></form>`;
   return `<aside class="drawer" role="dialog" aria-modal="true" aria-labelledby="dwT">
-    <div class="dh"><div style="min-width:0"><div class="label mono">${esc(a.id)} · ${esc(cliNome(a.cli))}</div><h2 id="dwT" style="margin-top:4px">${esc(a.acao)}</h2><div style="margin-top:8px" class="row-actions">${pill(s)}<span class="pill ok">${esc(a.status)}</span></div></div><button class="btn sm ghost" data-do="fechar" aria-label="Fechar">✕</button></div>
+    <div class="dh"><div style="min-width:0"><div class="label mono">${esc(a.id)} · ${esc(cliNome(a.cli))}</div><h2 id="dwT" tabindex="-1" style="margin-top:4px">${esc(a.acao)}</h2><div style="margin-top:8px" class="row-actions">${pill(s)}<span class="pill ok">${esc(a.status)}</span></div></div><button class="btn sm ghost xbtn" data-do="fechar" aria-label="Fechar">✕</button></div>
     <div class="db">
       <dl class="w5">
         <dt>O QUÊ</dt><dd>${esc(a.acao)}</dd>
@@ -601,7 +686,7 @@ function drawerHtml() {
       <div class="small muted">Origem: ${a.linha ? `linha ${a.linha} de ${esc(a.arquivo || 'arquivo de origem')}` : esc(a.origem || '—')} · registrada em ${fmtF(a.registro)}${a.statusOriginal ? ` · status no arquivo: “${esc(a.statusOriginal)}”` : ''}${a.respOriginal && a.respOriginal !== st.nome(a.resp) ? ` · responsável no arquivo: “${esc(a.respOriginal)}”` : ''}</div>
       ${form}
     </div>
-    ${aberta(a) && !modo ? `<div class="df"><button class="btn primary" data-do="concluir">Marcar como concluída</button><button class="btn" data-do="modo" data-m="reprog">${a.prazo ? 'Novo prazo' : 'Definir prazo'}</button>${a.status === 'Não iniciada' ? '<button class="btn" data-do="iniciar">Em andamento</button>' : ''}<button class="btn danger ghost" data-do="modo" data-m="cancel">Cancelar</button></div>` : ''}
+    ${aberta(a) && !modo ? `<div class="df"><button class="btn primary" data-do="concluir">Concluir</button><button class="btn" data-do="modo" data-m="reprog">${a.prazo ? 'Novo prazo' : 'Definir prazo'}</button>${a.status === 'Não iniciada' ? '<button class="btn" data-do="iniciar">Iniciar</button>' : ''}<button class="btn danger ghost" data-do="modo" data-m="cancel">Cancelar</button></div>` : ''}
   </aside>`;
 }
 function modalHtml() {
@@ -611,7 +696,7 @@ function modalHtml() {
   const dems = demandasC(cli).filter(d => d.id === pre || !d.encerrada).sort((a, b) => a.titulo.localeCompare(b.titulo));
   const areaPre = pre && st.demanda(pre) ? st.demanda(pre).area : '';
   return `<div class="modal" role="dialog" aria-modal="true" aria-labelledby="mT">
-    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px"><h2 id="mT">Nova ação</h2><button class="btn sm ghost" data-do="fechar" aria-label="Fechar">✕</button></div>
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px"><h2 id="mT" tabindex="-1">Nova ação</h2><button class="btn sm ghost xbtn" data-do="fechar" aria-label="Fechar">✕</button></div>
     <form id="fNova" class="form">
       <div class="field full"><label for="mCli">Cliente</label><select id="mCli">${clientesOrd().map(c => `<option value="${esc(c.id)}"${c.id === cli ? ' selected' : ''}>${esc(c.nome)}</option>`).join('')}</select></div>
       <div class="field full"><label for="mAcao">O quê (ação)</label><input id="mAcao" required maxlength="255" placeholder="Verbo no infinitivo + objeto. Ex.: Enviar a posição do estoque de outubro"></div>
@@ -619,7 +704,7 @@ function modalHtml() {
       <div class="field full"><label for="mDem">Demanda</label><select id="mDem"><option value="">Nova pendência com o mesmo título</option>${dems.map(d => `<option value="${esc(d.id)}"${d.id === pre ? ' selected' : ''}>${esc(d.titulo)}</option>`).join('')}</select></div>
       <div class="field"><label for="mResp">Quem</label><select id="mResp" required><option value="">Escolha</option>${pes.map(p => `<option value="${esc(p.id)}">${esc(p.nome)}${p.empresa === 'Solve' ? ' (Solve)' : ''}</option>`).join('')}</select></div>
       <div class="field"><label for="mPrazo">Prazo</label><input type="date" id="mPrazo" required min="${HOJE}"></div>
-      <div class="field"><label for="mArea">Onde (área)</label><select id="mArea">${AREAS.map(a => `<option${a === (areaPre || 'Controladoria') ? ' selected' : ''}>${esc(a)}</option>`).join('')}</select></div>
+      <div class="field"><label for="mArea">Onde (área)</label><select id="mArea" required><option value="">Escolha</option>${AREAS.map(a => `<option${a === areaPre ? ' selected' : ''}>${esc(a)}</option>`).join('')}</select></div>
       <div class="field"><label for="mComo">Como (opcional)</label><input id="mComo" maxlength="500"></div>
       <div class="full row-actions"><button class="btn primary" type="submit">Registrar ação</button><span class="small err-text" id="mErr" role="alert"></span></div>
     </form>
@@ -627,63 +712,110 @@ function modalHtml() {
   </div>`;
 }
 function abrirAcao(id) { S.drawer = { id, modo: null }; S.modal = null; renderLayer(); }
-function fechar() { S.drawer = null; S.modal = null; renderLayer(); }
+// Formulário aberto com algo digitado: pergunta antes de descartar.
+function sujo() {
+  const f = $('#layer form');
+  return !!f && [...f.querySelectorAll('input:not([type=checkbox]):not([type=hidden]),textarea')].some(i => i.value.trim());
+}
+function fechar(forcar) {
+  if (!forcar && sujo() && !confirm('Descartar o que foi digitado?')) return;
+  S.drawer = null; S.modal = null; renderLayer();
+}
 
 /* ---------- gravação ---------- */
-async function grava(fn, okMsg) {
+function fotografarCampos() {
+  return [...document.querySelectorAll('#layer form [id], #view form [id], #ataTxt, #ataPart')]
+    .filter(el => /^(INPUT|SELECT|TEXTAREA)$/.test(el.tagName)).map(el => ({ id: el.id, v: el.value, c: el.checked }));
+}
+function restaurarCampos(fs) {
+  fs.forEach(({ id, v, c }) => { const el = document.getElementById(id); if (!el) return; if (el.type === 'checkbox') el.checked = c; else el.value = v; });
+}
+async function grava(fn, okMsg, undo) {
   if (S.busy) return;
   S.busy = true; document.body.classList.add('busy');
+  const campos = fotografarCampos();
+  let falhou = false;
   try {
     const r = await fn();
-    toast(typeof okMsg === 'function' ? okMsg(r) : okMsg);
+    toast(typeof okMsg === 'function' ? okMsg(r) : okMsg, false, undo);
   } catch (e) {
     console.error(e);
-    toast('Não consegui gravar no SharePoint: ' + (e.message || e) + '. Recarreguei os dados.', true);
+    falhou = true;
+    toast(e.status === 401
+      ? 'Sua sessão com a Microsoft expirou e nada foi gravado. Atualize a página para entrar de novo; o que você digitou continua no formulário.'
+      : 'Não consegui gravar no SharePoint: ' + (e.message || e) + '. Nada foi alterado; os dados foram relidos e o que você digitou continua no formulário.', true);
     await recarregar(true);
   } finally {
     S.busy = false; document.body.classList.remove('busy');
     render();
+    if (falhou) restaurarCampos(campos);
   }
 }
 async function recarregar(silencioso) {
   if (S.reloading) return;
   S.reloading = true; document.body.classList.add('busy');
+  const b = $('#btnSync'); if (b) { b.disabled = true; b.textContent = 'Atualizando…'; }
   try { await st.load(); if (!silencioso) toast('Dados atualizados do SharePoint'); }
   catch (e) { console.error(e); toast('Não consegui ler as listas: ' + (e.message || e), true); }
-  finally { S.reloading = false; document.body.classList.remove('busy'); render(); }
+  finally {
+    S.reloading = false; document.body.classList.remove('busy');
+    if (b) { b.disabled = false; b.textContent = 'Atualizar'; }
+    render();
+  }
 }
+const concluirComDesfazer = a => {
+  const antes = a.status;
+  grava(() => st.concluir(a), `${a.id} concluída`, () => grava(() => st.desfazerConclusao(a, antes), `${a.id} voltou para ${antes === 'Não iniciada' ? 'não iniciada' : 'em andamento'}`));
+};
+// Rascunho da ata guardado na aba: sobrevive a recarregar a página ou a um novo login.
+const ATA_KEY = 'gp.ataRascunho';
+function guardarAta() { try { if (S.ataRascunho) sessionStorage.setItem(ATA_KEY, JSON.stringify({ ...S.ataRascunho, dia: HOJE })); } catch (e) { /* sem storage */ } }
+function esquecerAta() { try { sessionStorage.removeItem(ATA_KEY); } catch (e) { /* sem storage */ } }
+function recuperarAta() {
+  try { const r = JSON.parse(sessionStorage.getItem(ATA_KEY) || 'null'); if (r && r.dia === hojeISO()) { S.ataRascunho = { cli: r.cli, texto: r.texto, part: r.part }; S.ataDirty = true; } } catch (e) { /* sem storage */ }
+}
+const atualizarEstadoAta = () => { const el = $('#ataEstado'); if (el) el.innerHTML = ataEstado(st.forumDeHoje(S.cli)); };
 
 /* ---------- eventos ---------- */
 function onClick(e) {
+  const acct = $('#acct'); if (acct && acct.open && !e.target.closest('#acct')) acct.open = false;
   const t = e.target.closest('button, a, tr[data-acao], tr[data-cli-go], [data-do]');
   if (!t) return;
   const ds = t.dataset;
+  if (ds.tema) { aplicarTema(ds.tema); render(); const b = document.querySelector(`#${t.closest('.tema').id} [data-tema="${ds.tema}"]`); if (b) b.focus(); return; }
   if (ds.cliSet) S.cli = ds.cliSet;
   if (ds.cliGo) { S.cli = ds.cliGo; go('visao'); return; }
-  if (ds.sig) { e.preventDefault(); S.fa = { q: '', sit: ds.sig, resp: '', area: '', tipo: '' }; S.drawer = null; go('acoes'); return; }
-  if (ds.resp) { S.fa = { q: '', sit: 'abertas', resp: ds.resp, area: '', tipo: '' }; go('acoes'); return; }
+  if (ds.sig) { e.preventDefault(); S.fa = { ...FA0, sit: ds.sig }; S.drawer = null; go('acoes'); return; }
+  if (ds.resp) { S.fa = { ...FA0, resp: ds.resp }; go('acoes'); return; }
   if (ds.demGo) { S.demOpen.add(ds.demGo); S.fd = { tipo: 'todas', st: 'todas' }; S.drawer = null; go('demandas'); setTimeout(() => { const el = document.getElementById('dem-' + ds.demGo); if (el) el.scrollIntoView({ block: 'center' }); }, 30); return; }
   if (ds.dem) { S.demOpen.has(ds.dem) ? S.demOpen.delete(ds.dem) : S.demOpen.add(ds.dem); render(); const b = document.querySelector(`[data-dem="${CSS.escape(ds.dem)}"]`); if (b) b.focus(); return; }
   if (ds.fdTipo) { S.fd.tipo = ds.fdTipo; render(); return; }
   if (ds.fdSt) { S.fd.st = ds.fdSt; render(); return; }
   if (ds.step !== undefined) { S.step = +ds.step; render(); window.scrollTo({ top: 0 }); return; }
-  if (ds.q === 'concluir') { e.stopPropagation(); const a = st.acao(ds.id); if (a) grava(() => st.concluir(a), `${a.id} concluída`); return; }
+  if (ds.q === 'concluir') { e.stopPropagation(); const a = st.acao(ds.id); if (a) concluirComDesfazer(a); return; }
   if (ds.q === 'reprog') { e.stopPropagation(); S.drawer = { id: ds.id, modo: 'reprog' }; renderLayer(); const i = $('#rPrazo'); if (i) i.focus(); return; }
   if (ds.acao) { abrirAcao(ds.acao); return; }
   if (ds.go) { if (ds.fd) S.fd = { tipo: 'todas', st: ds.fd }; go(ds.go); return; }
   switch (ds.do) {
     case 'fechar': fechar(); break;
     case 'modo': S.drawer.modo = ds.m || null; renderLayer(); { const i = $(ds.m === 'cancel' ? '#cMot' : '#rPrazo'); if (i) i.focus(); } break;
-    case 'concluir': { const a = st.acao(S.drawer.id); grava(() => st.concluir(a), `${a.id} concluída`); break; }
+    case 'concluir': { const a = st.acao(S.drawer.id); concluirComDesfazer(a); break; }
     case 'iniciar': { const a = st.acao(S.drawer.id); grava(() => st.iniciar(a), `${a.id} em andamento`); break; }
-    case 'encerrarDem': { const d = st.demanda(ds.id); if (d) grava(() => st.encerrarDemanda(d), 'Demanda encerrada'); break; }
+    case 'encerrarDem': { const d = st.demanda(ds.id); if (d) grava(() => st.encerrarDemanda(d), 'Demanda encerrada', () => grava(() => st.reabrirDemanda(d), 'Demanda reaberta')); break; }
     case 'capturar': S.drawer = null; S.modal = { dem: ds.demPre || '', cli: S.cli }; renderLayer(); { const i = $('#mAcao'); if (i) i.focus(); } break;
     case 'copiarAta': copiar($('#ataTxt').value, $('#ataTxt')); break;
-    case 'gerarAta': S.ataRascunho = null; $('#ataTxt').value = ata(S.cli); break;
-    case 'salvarAta': { const texto = $('#ataTxt').value, part = $('#ataPart').value.trim(); S.ataRascunho = { cli: S.cli, texto, part }; grava(() => st.salvarAta(S.cli, texto, part), 'Ata salva no SharePoint'); break; }
+    case 'gerarAta':
+      if (S.ataDirty && !confirm('Gerar a ata de novo apaga as edições que você fez no texto. Continuar?')) break;
+      S.ataRascunho = null; S.ataDirty = false; esquecerAta(); $('#ataTxt').value = ata(S.cli); atualizarEstadoAta(); break;
+    case 'salvarAta': {
+      const texto = $('#ataTxt').value, part = $('#ataPart').value.trim();
+      S.ataRascunho = { cli: S.cli, texto, part };
+      grava(async () => { await st.salvarAta(S.cli, texto, part); S.ataDirty = false; esquecerAta(); }, 'Ata salva no SharePoint');
+      break;
+    }
     case 'copiarCob': copiar($('#cobTxt').value, $('#cobTxt')); break;
     case 'recarregar': recarregar(); break;
-    case 'sair': if (ctx.logout) ctx.logout(); break;
+    case 'sair': if (S.ataDirty && !confirm('A ata editada ainda não foi salva no SharePoint. Sair mesmo assim?')) break; esquecerAta(); if (ctx.logout) ctx.logout(); break;
     default: break;
   }
 }
@@ -705,7 +837,7 @@ function onSubmit(e) {
   }
   if (f.id === 'fNova') {
     const cli = $('#mCli').value, acao = $('#mAcao').value.trim(), resp = $('#mResp').value, prazo = $('#mPrazo').value;
-    if (!acao || !resp || !prazo) { $('#mErr').textContent = 'Preencha ação, responsável e prazo.'; return; }
+    if (!acao || !resp || !prazo || !$('#mArea').value) { $('#mErr').textContent = 'Preencha ação, responsável, prazo e área.'; return; }
     if (prazo < HOJE) { $('#mErr').textContent = 'O prazo precisa ser a partir de hoje.'; return; }
     if (!st.nominal(resp)) { $('#mErr').textContent = 'Escolha uma pessoa, não uma empresa ou setor.'; return; }
     grava(async () => {
@@ -722,8 +854,11 @@ function onSubmit(e) {
   }
 }
 function onInput(e) {
-  if (e.target.id === 'fq') { S.fa.q = e.target.value; render(); }
-  if (e.target.id === 'ataTxt' || e.target.id === 'ataPart') S.ataRascunho = { cli: S.cli, texto: $('#ataTxt').value, part: $('#ataPart').value };
+  if (e.target.id === 'fq') { S.fa.q = e.target.value; clearTimeout(buscaT); buscaT = setTimeout(render, 200); }
+  if (e.target.id === 'ataTxt' || e.target.id === 'ataPart') {
+    S.ataRascunho = { cli: S.cli, texto: $('#ataTxt').value, part: $('#ataPart').value };
+    S.ataDirty = true; guardarAta(); atualizarEstadoAta();
+  }
 }
 function onChange(e) {
   const id = e.target.id;
@@ -734,18 +869,32 @@ function onChange(e) {
   if (id === 'ftipo') { S.fa.tipo = e.target.value; render(); }
   if (id === 'selP') { S.pessoaSemana = e.target.value; render(); }
   if (id === 'mCli') { S.modal = { cli: e.target.value, dem: '' }; renderLayer(); }
+  if (id === 'mDem') { const d = st.demanda(e.target.value), ar = $('#mArea'); if (d && d.area && ar && !ar.value) ar.value = d.area; }
+  if (id === 'dGera') { const o = $('#dDemNone'); if (o) o.textContent = e.target.checked ? 'Nenhuma (a ação gerada cria uma pendência nova)' : 'Nenhuma'; }
 }
 
 export function startApp(theStore, context) {
   st = theStore; ctx = context || {};
   try { S.cli = localStorage.getItem('gp.cli') || null; } catch (e) { S.cli = null; }
+  lerHash();
+  recuperarAta();
   shell();
+  $('#toastAct').addEventListener('click', () => { const u = toastUndo; fecharToast(); if (u) u(); });
+  $('#alertClose').addEventListener('click', () => { $('#alert').hidden = true; });
+  window.addEventListener('beforeunload', e => { if (S.ataDirty) { guardarAta(); e.preventDefault(); e.returnValue = ''; } });
+  window.addEventListener('gp:relogin', () => { guardarAta(); toast('Sua sessão expirou. Abrindo o login da Microsoft…'); });
   document.addEventListener('click', onClick);
   document.addEventListener('submit', onSubmit);
   document.addEventListener('input', onInput);
   document.addEventListener('change', onChange);
-  document.addEventListener('keydown', e => { if (e.key === 'Escape' && (S.drawer || S.modal)) fechar(); });
-  window.addEventListener('hashchange', () => { S.drawer = null; render(); window.scrollTo({ top: 0 }); });
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape') {
+      if (S.drawer || S.modal) { e.preventDefault(); fechar(); return; }
+      const acct = $('#acct'); if (acct && acct.open) { acct.open = false; acct.querySelector('summary').focus(); }
+    }
+    if (e.key === 'Tab' && (S.drawer || S.modal)) prenderFoco(e);
+  });
+  window.addEventListener('hashchange', () => { lerHash(); S.drawer = null; S.modal = null; render(); window.scrollTo({ top: 0 }); });
   window.addEventListener('focus', () => { if (!S.drawer && !S.modal && !S.busy && st.loadedAt && Date.now() - st.loadedAt.getTime() > 180000) recarregar(true); });
   render();
 }

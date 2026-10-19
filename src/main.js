@@ -3,6 +3,10 @@ import { initAuth, login, logout, getToken, authErrorMessage } from './auth.js';
 import { GraphBackend, MemoryBackend } from './graph.js';
 import { Store } from './store.js';
 import { startApp } from './app.js';
+import { aplicarTema, temaAtual } from './theme.js';
+
+aplicarTema(temaAtual());
+if (window.matchMedia) matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', () => aplicarTema(temaAtual()));
 
 const root = document.getElementById('root');
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -65,7 +69,7 @@ async function boot() {
     telaErro(msg, e.message);
     return;
   }
-  startApp(st, { logout, listUrl: be.webUrl ? be.webUrl + '/_layouts/15/viewlsts.aspx' : null });
+  startApp(st, { logout, login, listUrl: be.webUrl ? be.webUrl + '/_layouts/15/viewlsts.aspx' : null });
 }
 
 boot();

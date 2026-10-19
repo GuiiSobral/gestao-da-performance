@@ -32,13 +32,15 @@ export function logout() {
   return pca.logoutRedirect({ account: pca.getActiveAccount() });
 }
 
-export async function getToken() {
+export async function getToken(forceRefresh) {
   const account = pca.getActiveAccount();
   try {
-    const r = await pca.acquireTokenSilent({ scopes: CONFIG.scopes, account });
+    const r = await pca.acquireTokenSilent({ scopes: CONFIG.scopes, account, forceRefresh: !!forceRefresh });
     return r.accessToken;
   } catch (e) {
     if (e instanceof InteractionRequiredAuthError) {
+      // A sessão venceu de vez: avisa a tela (que guarda o rascunho) e leva ao login da Microsoft.
+      try { window.dispatchEvent(new CustomEvent('gp:relogin')); } catch (x) { /* sem evento */ }
       await pca.acquireTokenRedirect({ scopes: CONFIG.scopes, account });
       return new Promise(() => {}); // a página vai ser redirecionada
     }

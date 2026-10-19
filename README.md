@@ -19,6 +19,13 @@ Endereço: https://guiisobral.github.io/gestao-da-performance/
 - Situação da ação, farol, status da demanda e avanço da frente são calculados, nunca digitados.
 - Demanda com todas as ações fechadas fica em "Validar encerramento" até alguém confirmar.
 
+## Interface
+
+- Tema claro, escuro ou automático (segue o sistema), escolhido no rodapé do menu ou em **Conta** no celular; fica salvo no navegador.
+- Filtros e telas ficam no endereço (ex.: `#acoes?cli=MOE&sit=vencidas`): o Voltar funciona e o link pode ser enviado.
+- Concluir uma ação ou encerrar uma demanda mostra **Desfazer** por 6 segundos.
+- O rascunho da ata fica guardado na aba até ser salvo no SharePoint.
+
 ## Desenvolvimento
 
 ```bash

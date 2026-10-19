@@ -132,6 +132,13 @@ export class Store {
     a.status = 'Concluída'; a.conclusao = hoje; a.modifiedDay = hoje;
   }
 
+  // Desfaz uma conclusão feita por engano (volta ao status anterior e limpa a data).
+  async desfazerConclusao(a, statusAnterior) {
+    const st = statusAnterior === 'Não iniciada' ? 'Não iniciada' : 'Em andamento';
+    await this.be.update('GP_Acoes', a.itemId, { Status: st, DataConclusao: null });
+    a.status = st; a.conclusao = null; a.modifiedDay = hojeISO();
+  }
+
   async iniciar(a) {
     await this.be.update('GP_Acoes', a.itemId, { Status: 'Em andamento' });
     a.status = 'Em andamento'; a.modifiedDay = hojeISO();
@@ -165,6 +172,11 @@ export class Store {
     const hoje = hojeISO();
     await this.be.update('GP_Demandas', d.itemId, { Encerrada: true, DataEncerramento: toSP(hoje) });
     d.encerrada = true; d.dataEnc = hoje;
+  }
+
+  async reabrirDemanda(d) {
+    await this.be.update('GP_Demandas', d.itemId, { Encerrada: false, DataEncerramento: null });
+    d.encerrada = false; d.dataEnc = null;
   }
 
   async novaAcao({ cli, acao, porque, dem, resp, prazo, area, como, origem }) {
