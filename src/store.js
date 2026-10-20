@@ -206,6 +206,38 @@ export class Store {
     return a;
   }
 
+  // Entrega de uma frente: é a demanda onde as ações da frente ficam penduradas.
+  async novaEntrega({ frente, titulo, resp, area, prazo }) {
+    const fr = this.frente(frente);
+    if (!fr) throw new Error(`frente ${frente} não encontrada`);
+    const cli = fr.cli;
+    const code = this.proximo(this.demandas.filter(d => d.cli === cli), `${cli}-EF-`, 2);
+    const f = { Title: code, ClienteCodigo: cli, Assunto: titulo.slice(0, 255), Tipo: 'Entrega de frente', FrenteCodigo: fr.id,
+      ResponsavelCodigo: resp, Area: area, PrazoDemanda: toSP(prazo), Encerrada: false, Origem: 'Captura rápida' };
+    const it = await this.be.create('GP_Demandas', strip(f));
+    if (fr.encerrada) {
+      await this.be.update('GP_Frentes', fr.itemId, { Encerrada: false, DataEncerramento: null });
+      fr.encerrada = false; fr.dataEnc = null;
+    }
+    const d = { itemId: it.id, id: code, cli, titulo: f.Assunto, tipo: 'Entrega de frente', frente: fr.id, prioridade: null, resp, area,
+      prazo: prazo || null, encerrada: false, dataEnc: null, origem: f.Origem, statusOriginal: '', nota: '' };
+    this.demandas.push(d);
+    return d;
+  }
+
+  // Frente nova já nasce com a primeira entrega, para poder receber ações.
+  async novaFrente({ cli, nome, area, dono, apoio, inicio, fim, entrega }) {
+    const code = this.proximo(this.frentes.filter(f => f.cli === cli), `${cli}-F`, 2);
+    const f = { Title: code, ClienteCodigo: cli, Nome: nome.slice(0, 255), Area: area, DonoCodigo: dono, Apoio: (apoio || '').slice(0, 255),
+      Inicio: toSP(inicio), FimPrevisto: toSP(fim), Encerrada: false };
+    const it = await this.be.create('GP_Frentes', strip(f));
+    const fr = { itemId: it.id, id: code, cli, nome: f.Nome, area, dono, apoio: apoio || '', inicio: inicio || null, fim,
+      encerrada: false, dataEnc: null, statusOriginal: '', nota: '' };
+    this.frentes.push(fr);
+    const d = await this.novaEntrega({ frente: code, titulo: entrega || nome, resp: dono, area, prazo: fim });
+    return { frente: fr, entrega: d };
+  }
+
   forumDeHoje(cli) {
     const hoje = hojeISO();
     return this.foruns.find(f => f.cli === cli && f.data === hoje) || null;

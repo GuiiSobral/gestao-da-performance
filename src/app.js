@@ -278,7 +278,7 @@ function excecoes(cli) {
 
 function semDados() {
   const c = st.cliente(S.cli);
-  return `<div class="empty"><b>${esc(c ? c.nome : 'Cliente')}</b> ainda não foi migrado para a nova base.${c && c.arquivo ? `<br><span class="small mono">${esc(c.arquivo)}</span>` : ''}<br><br><button class="btn primary" data-do="capturar">+ Registrar a primeira ação</button></div>`;
+  return `<div class="empty"><b>${esc(c ? c.nome : 'Cliente')}</b> ainda não foi migrado para a nova base.${c && c.arquivo ? `<br><span class="small mono">${esc(c.arquivo)}</span>` : ''}<br><br><span class="row-actions" style="justify-content:center"><button class="btn primary" data-do="capturar">+ Registrar a primeira ação</button><button class="btn" data-do="novaFrente">+ Nova frente</button></span></div>`;
 }
 
 /* ---------- Visão geral ---------- */
@@ -336,12 +336,14 @@ function renderVisao() {
       ${indicadoresPanel()}
     </div>
   </div>
-  ${frs.length ? `<section class="stack"><header class="sechead"><h2>Frentes (projetos estratégicos)</h2><span class="small muted">avanço = ações concluídas sobre ações não canceladas</span></header><div class="tablewrap"><table>
-    <thead><tr><th style="width:1%"></th><th>Frente</th><th>Dono</th><th>Fim</th><th>Avanço</th><th>Status</th></tr></thead>
+  <section class="stack"><header class="sechead"><h2>Frentes (projetos estratégicos)</h2><span class="row-actions"><span class="small muted">avanço = ações concluídas sobre ações não canceladas</span><button class="btn sm" data-do="novaFrente">+ Nova frente</button></span></header>
+  ${frs.length ? `<div class="tablewrap"><table>
+    <thead><tr><th style="width:1%"></th><th>Frente</th><th>Dono</th><th>Fim</th><th>Avanço</th><th>Status</th><th><span class="sr-only">Ações</span></th></tr></thead>
     <tbody>${frs.map(({ f, i }) => `<tr><td>${dot(i.farol, FAROL[i.farol])}</td><td><b>${esc(f.nome)}</b><span class="sub">${esc(f.area)}${f.nota ? ' · ' + esc(f.nota) : ''}</span></td>
       <td class="c-nw">${respHtml(f.dono)}</td><td class="num c-nw">${f.fim ? fmt(f.fim) : '—'}</td>
       <td><div class="prog"><span class="t"><span class="f" style="width:${i.prog}%"></span></span><span class="n">${i.ac.length ? i.prog + '%' : '—'}</span></div><span class="sub">${i.conc} de ${i.val} ações</span></td>
-      <td class="c-nw">${i.status === 'Em andamento' && i.atrasada ? '<span class="pill bad">Atrasada</span>' : i.status === 'Sem plano ativo' ? '<span class="pill bad line">Sem plano ativo</span>' : i.status === 'Concluída' ? '<span class="pill ok">Concluída</span>' : '<span class="pill good">Em andamento</span>'}</td></tr>`).join('')}</tbody></table></div></section>` : ''}`;
+      <td class="c-nw">${i.status === 'Em andamento' && i.atrasada ? '<span class="pill bad">Atrasada</span>' : i.status === 'Sem plano ativo' ? '<span class="pill bad line">Sem plano ativo</span>' : i.status === 'Concluída' ? '<span class="pill ok">Concluída</span>' : '<span class="pill good">Em andamento</span>'}</td>
+      <td class="c-nw"><span class="row-actions" style="flex-wrap:nowrap;justify-content:flex-end">${f.encerrada ? '' : i.dems.some(d => !d.encerrada) ? `<button class="btn sm ghost" data-do="capturar" data-dem-pre="${esc(i.dems.find(d => !d.encerrada).id)}" aria-label="Nova ação na frente ${esc(f.nome)}">+ Ação</button>` : ''}<button class="btn sm ghost" data-do="novaEntrega" data-fr="${esc(f.id)}" aria-label="Nova entrega na frente ${esc(f.nome)}">+ Entrega</button></span></td></tr>`).join('')}</tbody></table></div>` : '<div class="empty small">Nenhuma frente cadastrada para este cliente.</div>'}</section>`;
 }
 
 function indicadoresPanel() {
@@ -689,7 +691,46 @@ function drawerHtml() {
     ${aberta(a) && !modo ? `<div class="df"><button class="btn primary" data-do="concluir">Concluir</button><button class="btn" data-do="modo" data-m="reprog">${a.prazo ? 'Novo prazo' : 'Definir prazo'}</button>${a.status === 'Não iniciada' ? '<button class="btn" data-do="iniciar">Iniciar</button>' : ''}<button class="btn danger ghost" data-do="modo" data-m="cancel">Cancelar</button></div>` : ''}
   </aside>`;
 }
+const optPessoas = (cli, sel) => st.pessoasPara(cli).map(p => `<option value="${esc(p.id)}"${p.id === sel ? ' selected' : ''}>${esc(p.nome)}${p.empresa === 'Solve' ? ' (Solve)' : ''}</option>`).join('');
+const optAreas = sel => AREAS.map(a => `<option${a === sel ? ' selected' : ''}>${esc(a)}</option>`).join('');
+const cabModal = t => `<div style="display:flex;justify-content:space-between;align-items:center;gap:10px"><h2 id="mT" tabindex="-1">${t}</h2><button class="btn sm ghost xbtn" data-do="fechar" aria-label="Fechar">✕</button></div>`;
+function frenteModalHtml() {
+  const cli = S.modal.cli || S.cli;
+  return `<div class="modal" role="dialog" aria-modal="true" aria-labelledby="mT">
+    ${cabModal('Nova frente')}
+    <form id="fFrente" class="form">
+      <div class="field full"><label for="nfCli">Cliente</label><select id="nfCli">${clientesOrd().map(c => `<option value="${esc(c.id)}"${c.id === cli ? ' selected' : ''}>${esc(c.nome)}</option>`).join('')}</select></div>
+      <div class="field full"><label for="nfNome">Nome da frente</label><input id="nfNome" required maxlength="255" placeholder="Ex.: Implantar o fluxo de caixa diário"></div>
+      <div class="field full"><label for="nfEnt">Primeira entrega (opcional)</label><input id="nfEnt" maxlength="255" placeholder="Em branco, a entrega leva o nome da frente"></div>
+      <div class="field"><label for="nfDono">Dono</label><select id="nfDono" required><option value="">Escolha</option>${optPessoas(cli)}</select></div>
+      <div class="field"><label for="nfArea">Área</label><select id="nfArea" required><option value="">Escolha</option>${optAreas('')}</select></div>
+      <div class="field"><label for="nfIni">Início</label><input type="date" id="nfIni" value="${HOJE}"></div>
+      <div class="field"><label for="nfFim">Fim previsto</label><input type="date" id="nfFim" required min="${HOJE}"></div>
+      <div class="field full"><label for="nfApoio">Apoio (opcional)</label><input id="nfApoio" maxlength="255" placeholder="Nomes, separados por vírgula"></div>
+      <div class="full row-actions"><button class="btn primary" type="submit">Criar frente</button><span class="small err-text" id="nfErr" role="alert"></span></div>
+    </form>
+    <p class="small muted" style="margin:0">O código (${esc(cli)}-F..) é gerado sozinho. A frente nasce com uma demanda de entrega e, em seguida, abre a primeira ação: frente sem ação aberta aparece como “sem plano ativo”.</p>
+  </div>`;
+}
+function entregaModalHtml() {
+  const fr = st.frente(S.modal.fr);
+  if (!fr) return '';
+  const n = st.demandas.filter(d => d.frente === fr.id).length;
+  return `<div class="modal" role="dialog" aria-modal="true" aria-labelledby="mT">
+    ${cabModal('Nova entrega')}
+    <p class="small muted" style="margin:0">Frente <b>${esc(fr.nome)}</b> · ${n} ${plural(n, 'entrega registrada', 'entregas registradas')}${fr.encerrada ? ' · a frente está encerrada e será reaberta' : ''}</p>
+    <form id="fEntrega" class="form">
+      <div class="field full"><label for="neTit">Entrega</label><input id="neTit" required maxlength="255" value="${n ? '' : esc(fr.nome)}" placeholder="O que esta etapa da frente entrega"></div>
+      <div class="field"><label for="neResp">Responsável</label><select id="neResp" required><option value="">Escolha</option>${optPessoas(fr.cli, st.nominal(fr.dono) ? fr.dono : '')}</select></div>
+      <div class="field"><label for="neArea">Área</label><select id="neArea" required><option value="">Escolha</option>${optAreas(fr.area)}</select></div>
+      <div class="field"><label for="nePrazo">Prazo</label><input type="date" id="nePrazo" required min="${HOJE}" value="${fr.fim && fr.fim >= HOJE ? fr.fim : ''}"></div>
+      <div class="full row-actions"><button class="btn primary" type="submit">Criar entrega</button><span class="small err-text" id="neErr" role="alert"></span></div>
+    </form>
+  </div>`;
+}
 function modalHtml() {
+  if (S.modal.kind === 'frente') return frenteModalHtml();
+  if (S.modal.kind === 'entrega') return entregaModalHtml();
   const cli = S.modal.cli || S.cli;
   const pre = S.modal.dem || '';
   const pes = st.pessoasPara(cli);
@@ -715,7 +756,7 @@ function abrirAcao(id) { S.drawer = { id, modo: null }; S.modal = null; renderLa
 // Formulário aberto com algo digitado: pergunta antes de descartar.
 function sujo() {
   const f = $('#layer form');
-  return !!f && [...f.querySelectorAll('input:not([type=checkbox]):not([type=hidden]),textarea')].some(i => i.value.trim());
+  return !!f && [...f.querySelectorAll('input:not([type=checkbox]):not([type=hidden]),textarea')].some(i => i.value.trim() && i.value !== i.defaultValue);
 }
 function fechar(forcar) {
   if (!forcar && sujo() && !confirm('Descartar o que foi digitado?')) return;
@@ -803,6 +844,8 @@ function onClick(e) {
     case 'iniciar': { const a = st.acao(S.drawer.id); grava(() => st.iniciar(a), `${a.id} em andamento`); break; }
     case 'encerrarDem': { const d = st.demanda(ds.id); if (d) grava(() => st.encerrarDemanda(d), 'Demanda encerrada', () => grava(() => st.reabrirDemanda(d), 'Demanda reaberta')); break; }
     case 'capturar': S.drawer = null; S.modal = { dem: ds.demPre || '', cli: S.cli }; renderLayer(); { const i = $('#mAcao'); if (i) i.focus(); } break;
+    case 'novaFrente': S.drawer = null; S.modal = { kind: 'frente', cli: S.cli }; renderLayer(); { const i = $('#nfNome'); if (i) i.focus(); } break;
+    case 'novaEntrega': S.drawer = null; S.modal = { kind: 'entrega', fr: ds.fr }; renderLayer(); { const i = $('#neTit'); if (i) i.focus(); } break;
     case 'copiarAta': copiar($('#ataTxt').value, $('#ataTxt')); break;
     case 'gerarAta':
       if (S.ataDirty && !confirm('Gerar a ata de novo apaga as edições que você fez no texto. Continuar?')) break;
@@ -845,6 +888,32 @@ function onSubmit(e) {
       S.modal = null; S.cli = cli; return a;
     }, a => `Ação ${a.id} registrada`);
   }
+  if (f.id === 'fFrente') {
+    const cli = $('#nfCli').value, nome = $('#nfNome').value.trim(), dono = $('#nfDono').value, area = $('#nfArea').value;
+    const inicio = $('#nfIni').value, fim = $('#nfFim').value;
+    if (!nome || !dono || !area || !fim) { $('#nfErr').textContent = 'Preencha nome, dono, área e fim previsto.'; return; }
+    if (fim < HOJE) { $('#nfErr').textContent = 'O fim previsto precisa ser a partir de hoje.'; return; }
+    if (inicio && inicio > fim) { $('#nfErr').textContent = 'O início não pode ser depois do fim previsto.'; return; }
+    if (!st.nominal(dono)) { $('#nfErr').textContent = 'Escolha uma pessoa como dono, não uma empresa ou setor.'; return; }
+    const nomeDup = st.frentes.find(x => x.cli === cli && !x.encerrada && x.nome.trim().toLowerCase() === nome.toLowerCase());
+    if (nomeDup && !confirm(`Já existe a frente aberta “${nomeDup.nome}” (${nomeDup.id}). Criar outra com o mesmo nome?`)) return;
+    grava(async () => {
+      const r = await st.novaFrente({ cli, nome, area, dono, apoio: $('#nfApoio').value.trim(), inicio, fim, entrega: $('#nfEnt').value.trim() });
+      S.cli = cli; S.modal = { dem: r.entrega.id, cli };
+      return r;
+    }, r => `Frente ${r.frente.id} criada. Agora registre a primeira ação.`);
+  }
+  if (f.id === 'fEntrega') {
+    const fr = st.frente(S.modal.fr), titulo = $('#neTit').value.trim(), resp = $('#neResp').value, area = $('#neArea').value, prazo = $('#nePrazo').value;
+    if (!titulo || !resp || !area || !prazo) { $('#neErr').textContent = 'Preencha entrega, responsável, área e prazo.'; return; }
+    if (prazo < HOJE) { $('#neErr').textContent = 'O prazo precisa ser a partir de hoje.'; return; }
+    if (!st.nominal(resp)) { $('#neErr').textContent = 'Escolha uma pessoa, não uma empresa ou setor.'; return; }
+    grava(async () => {
+      const d = await st.novaEntrega({ frente: fr.id, titulo, resp, area, prazo });
+      S.modal = { dem: d.id, cli: fr.cli };
+      return d;
+    }, d => `Entrega ${d.id} criada. Agora registre a primeira ação.`);
+  }
   if (f.id === 'fDelib') {
     const texto = $('#dTexto').value.trim(), gera = $('#dGera').checked, resp = $('#dResp').value, prazo = $('#dPrazo').value, dem = $('#dDem').value;
     if (!texto) { $('#dErr').textContent = 'Escreva o que foi decidido.'; return; }
@@ -869,6 +938,11 @@ function onChange(e) {
   if (id === 'ftipo') { S.fa.tipo = e.target.value; render(); }
   if (id === 'selP') { S.pessoaSemana = e.target.value; render(); }
   if (id === 'mCli') { S.modal = { cli: e.target.value, dem: '' }; renderLayer(); }
+  if (id === 'nfCli') {
+    const keep = ['nfNome', 'nfEnt', 'nfArea', 'nfIni', 'nfFim', 'nfApoio'].map(k => [k, $('#' + k).value]);
+    S.modal = { kind: 'frente', cli: e.target.value }; renderLayer();
+    keep.forEach(([k, v]) => { $('#' + k).value = v; });
+  }
   if (id === 'mDem') { const d = st.demanda(e.target.value), ar = $('#mArea'); if (d && d.area && ar && !ar.value) ar.value = d.area; }
   if (id === 'dGera') { const o = $('#dDemNone'); if (o) o.textContent = e.target.checked ? 'Nenhuma (a ação gerada cria uma pendência nova)' : 'Nenhuma'; }
 }
