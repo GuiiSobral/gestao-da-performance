@@ -784,6 +784,8 @@ async function grava(fn, okMsg, undo) {
     falhou = true;
     toast(e.status === 401
       ? 'Sua sessão com a Microsoft expirou e nada foi gravado. Atualize a página para entrar de novo; o que você digitou continua no formulário.'
+      : e.status === 412
+      ? `${e.message || 'Outra pessoa alterou este registro'}, então não gravei para não apagar a alteração dela. Os dados foram relidos: confira e faça de novo. O que você digitou continua no formulário.`
       : 'Não consegui gravar no SharePoint: ' + (e.message || e) + '. Nada foi alterado; os dados foram relidos e o que você digitou continua no formulário.', true);
     await recarregar(true);
   } finally {
