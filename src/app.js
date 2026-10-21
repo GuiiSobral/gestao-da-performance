@@ -1,5 +1,5 @@
 // Interface da Gestão da Performance (mesmas telas do protótipo aprovado), lendo e gravando nas Listas do SharePoint.
-import { AREAS, hojeISO } from './store.js';
+import { AREAS, hojeISO, lerLinha, TIPOS_COMP, REPETICOES } from './store.js';
 import { aplicarTema, temaHtml } from './theme.js';
 
 let st = null;          // Store
@@ -10,7 +10,7 @@ let LIM7 = null;          // definido a cada render (HOJE + 7 dias)
 const S = {
   cli: null, fa: { q: '', sit: 'abertas', resp: '', area: '', tipo: '' }, fd: { tipo: 'todas', st: 'abertas' },
   demOpen: new Set(), step: 0, pessoaSemana: null, drawer: null, modal: null, busy: false, reloading: false,
-  opener: null, ataDirty: false
+  opener: null, ataDirty: false, fc: { p: '', cli: '', ver: 'pendentes' }
 };
 
 /* ---------- utilidades ---------- */
@@ -30,7 +30,10 @@ const cliNome = code => { const c = st.cliente(code); return c ? c.nome : code; 
 const acoesC = cli => st.acoes.filter(a => a.cli === cli);
 const demandasC = cli => st.demandas.filter(d => d.cli === cli);
 const frentesC = cli => st.frentes.filter(f => f.cli === cli);
-const clientesOrd = () => st.clientes.slice().sort((a, b) => st.temDados(b.id) - st.temDados(a.id) || a.nome.localeCompare(b.nome));
+const clientesOrd = () => st.clientes.filter(c => !c.interno).sort((a, b) => st.temDados(b.id) - st.temDados(a.id) || a.nome.localeCompare(b.nome));
+// Compromissos aceitam também a própria Solve (cliente interno), que fica fora da Carteira.
+const clientesComp = () => st.clientes.filter(c => c.situacao !== 'Encerrado').sort((a, b) => (b.interno - a.interno) || a.nome.localeCompare(b.nome));
+const DSEM = ['dom', 'seg', 'ter', 'qua', 'qui', 'sex', 'sáb'];
 const solveFez = a => a.status === 'Cancelada' && /mesmo fez/i.test(`${a.como} ${a.motivoCancel}`);
 
 function situacao(a) {
@@ -137,7 +140,8 @@ const ROUTES = {
   demandas: { t: 'Demandas', r: renderDemandas },
   acoes: { t: 'Ações', r: renderAcoes },
   forum: { t: 'Fórum de gestão', r: renderForum },
-  semana: { t: 'Minha semana', r: renderSemana, global: true }
+  semana: { t: 'Minha semana', r: renderSemana, global: true },
+  agenda: { t: 'Compromissos', r: renderAgenda, global: true }
 };
 // Endereço = tela + filtros (ex.: #acoes?cli=MOE&sit=vencidas). O Voltar do navegador funciona e o link pode ser enviado.
 const parseHash = () => {
@@ -154,6 +158,7 @@ function hashDe(r) {
   if (r === 'demandas') { if (S.fd.tipo !== FD0.tipo) p.set('tipo', S.fd.tipo); if (S.fd.st !== FD0.st) p.set('st', S.fd.st); }
   if (r === 'forum' && S.step) p.set('passo', String(S.step + 1));
   if (r === 'semana' && S.pessoaSemana) p.set('p', S.pessoaSemana);
+  if (r === 'agenda') { if (S.fc.p) p.set('p', S.fc.p); if (S.fc.cli) p.set('c', S.fc.cli); if (S.fc.ver !== 'pendentes') p.set('ver', S.fc.ver); }
   const q = p.toString();
   return '#' + r + (q ? '?' + q : '');
 }
@@ -164,6 +169,7 @@ function lerHash() {
   if (r === 'demandas') S.fd = { tipo: p.get('tipo') || FD0.tipo, st: p.get('st') || FD0.st };
   if (r === 'forum') { const n = Number(p.get('passo')); S.step = n >= 1 && n <= 5 ? n - 1 : S.step; }
   if (r === 'semana' && p.get('p')) S.pessoaSemana = p.get('p');
+  if (r === 'agenda') S.fc = { p: p.get('p') || '', cli: p.get('c') || '', ver: p.get('ver') || 'pendentes' };
 }
 // Atualiza o endereço sem criar uma entrada nova no histórico (usado ao mexer em filtros).
 function syncHash() { const h = hashDe(route()); if (location.hash !== h) history.replaceState(null, '', h); }
@@ -183,13 +189,14 @@ function shell() {
         <a href="#forum" data-r="forum">Fórum</a>
         <div class="grp label">Pessoas</div>
         <a href="#semana" data-r="semana">Minha semana</a>
+        <a href="#agenda" data-r="agenda">Compromissos <span class="cnt" id="cntComp"></span></a>
       </nav>
       <div class="railnote" id="railnote"></div>
     </aside>
     <main>
       <div class="top">
         <div class="ttl"><div class="label" id="eyebrow"></div><h1 id="ttl"></h1></div>
-        <div class="chips"><details class="acct" id="acct"><summary class="btn">Conta</summary><div class="acct-menu" id="acctMenu"></div></details><button class="btn" data-do="recarregar" id="btnSync" title="Ler de novo as listas do SharePoint">Atualizar</button><button class="btn primary" data-do="capturar">+ Nova ação</button></div>
+        <div class="chips"><details class="acct" id="acct"><summary class="btn">Conta</summary><div class="acct-menu" id="acctMenu"></div></details><button class="btn" data-do="recarregar" id="btnSync" title="Ler de novo as listas do SharePoint">Atualizar</button><button class="btn" data-do="novoComp" title="Compromisso pontual ou de rotina: um passo só, com data">+ Compromisso</button><button class="btn primary" data-do="capturar">+ Nova ação</button></div>
       </div>
       <div id="view" class="view"></div>
     </main>
@@ -199,8 +206,8 @@ function shell() {
 function render() {
   HOJE = hojeISO(); LIM7 = addDays(HOJE, 7);
   const r = route(), R = ROUTES[r];
-  const comDados = st.clientes.filter(c => st.temDados(c.id));
-  if (!S.cli || !st.cliente(S.cli)) S.cli = (comDados[0] || st.clientes[0] || {}).id || null;
+  const comDados = st.clientes.filter(c => !c.interno && st.temDados(c.id));
+  if (!S.cli || !st.cliente(S.cli) || st.interno(S.cli)) S.cli = (comDados[0] || st.clientes[0] || {}).id || null;
   const sel = $('#selCli');
   sel.innerHTML = clientesOrd().map(c => `<option value="${esc(c.id)}"${c.id === S.cli ? ' selected' : ''}>${esc(c.nome)}${st.temDados(c.id) ? '' : ' (a migrar)'}</option>`).join('');
   $('#cliWrap').hidden = !!R.global; $('#grpCli').hidden = !!R.global; sel.disabled = !!R.global;
@@ -209,6 +216,8 @@ function render() {
   document.querySelectorAll('#nav a').forEach(a => { if (a.dataset.r === r) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); });
   $('#cntAb').textContent = S.cli ? M(acoesC(S.cli)).ab : '';
   const eu = st.eu();
+  const urg = eu ? st.compromissos.filter(c => c.resp === eu.id && c.status === 'Pendente' && c.data && c.data <= HOJE).length : 0;
+  $('#cntComp').textContent = urg || '';
   const hora = st.loadedAt ? st.loadedAt.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '—';
   const conta = suf => `<b>${esc(st.user.name || '')}</b>${eu ? '' : '<span class="small">sem cadastro em Pessoas</span>'}
     <span>Dados do SharePoint lidos às ${hora}</span>
@@ -588,22 +597,109 @@ function proximos(cli) {
   return out;
 }
 
+
+/* ---------- Compromissos ---------- */
+// Um passo só, com data marcada. Não entram em farol, avanço de frente nem nos números de ações.
+const fechado = c => c.status !== 'Pendente';
+const quando = c => c.dataOrig || c.data;
+function sitComp(c) {
+  if (c.status === 'Feito') return c.realizado && quando(c) && c.realizado > quando(c) ? { k: 'warn', t: `Feito ${fmt(c.realizado)} · com atraso`, o: 5 } : { k: 'good', t: `Feito ${fmt(c.realizado)}`, o: 5 };
+  if (c.status === 'Não ocorreu') return { k: 'bad', t: 'Não ocorreu', o: 6, line: true };
+  if (c.status === 'Cancelado') return { k: 'off', t: 'Cancelado', o: 7 };
+  if (!c.data) return { k: 'warn', t: 'Sem data', o: 1, dias: 0 };
+  if (c.data < HOJE) { const d = diff(HOJE, c.data); return { k: 'bad', t: `Atrasado há ${d} d`, o: 1, dias: d }; }
+  if (c.data === HOJE) return { k: 'warn', t: 'Hoje' + (c.hora ? ' · ' + c.hora : ''), o: 2 };
+  return { k: 'good', t: `${DSEM[dt(c.data).getDay()]} ${fmt(c.data)}${c.hora ? ' · ' + c.hora : ''}`, o: c.data <= LIM7 ? 3 : 4, line: c.data > LIM7 };
+}
+const sortComp = l => l.slice().sort((a, b) => (a.data || '').localeCompare(b.data || '') || (a.hora || '99').localeCompare(b.hora || '99') || a.id.localeCompare(b.id, 'pt', { numeric: true }));
+// Sugestão de levar para a gestão: parado há 3 dias ou mais, ou a contraparte falhou nas duas últimas vezes da série.
+function sugerePendencia(c) {
+  if (c.status !== 'Pendente' || c.demanda || st.interno(c.cli)) return false;
+  if (c.data && c.data < HOJE && diff(HOJE, c.data) >= 3) return true;
+  const ult = st.serieDe(c).filter(fechado).filter(x => x.status !== 'Cancelado').slice(-2);
+  return ult.length === 2 && ult.every(x => x.status === 'Não ocorreu');
+}
+const contraNome = c => (c.contra ? st.nome(c.contra) : '');
+function compRows(l, showResp, showCli = true) {
+  return `<div style="overflow-x:auto"><table class="mini cards"><tbody>${l.map(c => { const s = sitComp(c), sug = sugerePendencia(c); return `<tr data-comp="${esc(c.id)}">
+    <td class="c-main" style="min-width:220px">${showCli ? `<span class="tag${st.interno(c.cli) ? ' solve' : ''}">${esc(c.cli)}</span> ` : ''}<button class="linkbtn plain" data-comp="${esc(c.id)}">${esc(c.oque)}</button>
+      <span class="sub" style="display:block;color:var(--muted);font-size:.8rem">${[c.contra ? 'com ' + esc(contraNome(c)) : '', showResp ? esc(st.nome(c.resp)) : '', c.rec !== 'Única' ? '↻ ' + c.rec.toLowerCase() : '',
+        c.status === 'Pendente' && c.dataOrig && c.data !== c.dataOrig ? 'remarcado de ' + fmt(c.dataOrig) : '', c.demanda ? 'virou pendência ' + esc(c.demanda) : ''].filter(Boolean).join(' · ')}</span></td>
+    <td class="c-nw">${pill(s)}${sug ? ' <span class="pill acc">virar pendência?</span>' : ''}</td>
+    <td class="c-nw c-act" style="text-align:right">${c.status === 'Pendente' ? `<span class="row-actions" style="justify-content:flex-end"><button class="btn sm" data-c="feito" data-id="${esc(c.id)}">Feito</button><button class="btn sm" data-c="remarcar" data-id="${esc(c.id)}">Remarcar</button></span>` : ''}</td></tr>`; }).join('')}</tbody></table></div>`;
+}
+// Cumprimento nos últimos 90 dias, pela data original: feito no dia, feito com atraso, não ocorreu e ainda atrasado.
+function cumprimento(list) {
+  const ini = addDays(HOJE, -90), g = {};
+  list.filter(c => c.status !== 'Cancelado' && quando(c) && quando(c) >= ini && quando(c) < HOJE || (c.status !== 'Pendente' && c.status !== 'Cancelado' && quando(c) === HOJE))
+    .forEach(c => {
+      const k = c.cli + '|' + (c.contra || '');
+      const x = g[k] = g[k] || { cli: c.cli, contra: c.contra, t: 0, dia: 0, atr: 0, nao: 0, pend: 0 };
+      x.t++;
+      if (c.status === 'Feito') { if (c.realizado && c.realizado > quando(c)) x.atr++; else x.dia++; }
+      else if (c.status === 'Não ocorreu') x.nao++;
+      else x.pend++;
+    });
+  return Object.values(g).map(x => ({ ...x, pct: Math.round(x.dia * 100 / x.t) })).sort((a, b) => a.pct - b.pct || b.t - a.t);
+}
+function renderAgenda() {
+  if (st.faltando && st.faltando.includes('GP_Compromissos')) return '<div class="empty">A lista <b>GP_Compromissos</b> não foi encontrada no SharePoint. Peça para criá-la no site Base Centralizada.</div>';
+  const eu = st.eu(), f = S.fc;
+  const p = f.p || (eu ? eu.id : 'todos');
+  const resps = [...new Set([...(eu ? [eu.id] : []), ...st.compromissos.map(c => c.resp).filter(Boolean)])].sort((a, b) => st.nome(a).localeCompare(st.nome(b)));
+  const base = st.compromissos.filter(c => (p === 'todos' || c.resp === p) && (!f.cli || c.cli === f.cli));
+  const todos = p === 'todos';
+  const opt = (v, cur, lab) => `<option value="${esc(v)}"${v === cur ? ' selected' : ''}>${esc(lab)}</option>`;
+  let corpo;
+  if (f.ver === 'realizados') {
+    const ini = addDays(HOJE, -60);
+    const l = base.filter(c => fechado(c) && (c.realizado || c.data || '') >= ini).sort((a, b) => (b.realizado || b.data || '').localeCompare(a.realizado || a.data || ''));
+    corpo = l.length ? `<section class="panel"><header><h2>Fechados nos últimos 60 dias</h2><span class="small muted">${l.length}</span></header>${compRows(l, todos)}</section>` : '<div class="empty">Nenhum compromisso fechado nos últimos 60 dias.</div>';
+  } else {
+    const pend = sortComp(base.filter(c => c.status === 'Pendente'));
+    const sec = [['Atrasados', pend.filter(c => sitComp(c).o === 1)], ['Hoje', pend.filter(c => sitComp(c).o === 2)], [`Até ${DSEM[dt(LIM7).getDay()]} ${fmt(LIM7)}`, pend.filter(c => sitComp(c).o === 3)], ['Depois', pend.filter(c => sitComp(c).o === 4)]];
+    corpo = sec.filter(x => x[1].length).map(([t, l]) => `<section class="panel"><header><h2>${t}</h2><span class="small muted">${l.length}</span></header>${compRows(l, todos)}</section>`).join('')
+      || `<div class="empty">Nenhum compromisso pendente${todos ? '' : ' para ' + esc(st.nome(p))}.<br><br><button class="btn primary" data-do="novoComp">+ Registrar compromisso</button></div>`;
+  }
+  const cp = cumprimento(base);
+  const tot = cp.reduce((a, x) => ({ t: a.t + x.t, dia: a.dia + x.dia }), { t: 0, dia: 0 });
+  return `
+  <p class="lede-sub" style="margin:0">Compromissos pontuais e de rotina: um passo só, com data marcada. Ficam fora dos números de ações, frentes e demandas. Quando deixa de ser corriqueiro, vira pendência.</p>
+  <div class="toolbar">
+    <select id="cP" aria-label="Responsável">${opt('todos', p, 'Todas as pessoas')}${resps.map(r => opt(r, p, st.nome(r) + (eu && r === eu.id ? ' (você)' : ''))).join('')}</select>
+    <select id="cCliF" aria-label="Cliente">${opt('', f.cli, 'Todos os clientes')}${clientesComp().map(c => opt(c.id, f.cli, c.nome)).join('')}</select>
+    <div class="seg" role="group"><button data-fc-ver="pendentes" aria-pressed="${f.ver !== 'realizados'}">Pendentes</button><button data-fc-ver="realizados" aria-pressed="${f.ver === 'realizados'}">Fechados</button></div>
+  </div>
+  <div class="grid3">
+    <div class="stack">${corpo}</div>
+    <section class="panel"><header><h2>Cumprimento</h2><span class="small muted">últimos 90 dias${tot.t ? ` · ${Math.round(tot.dia * 100 / tot.t)}% no dia` : ''}</span></header>
+      ${cp.length ? `<div style="overflow-x:auto"><table class="mini"><thead><tr><th>Com quem</th><th class="num">No dia</th><th class="num" title="Feito com atraso, não ocorreu ou ainda atrasado">Falhou</th><th class="num">%</th></tr></thead><tbody>${cp.slice(0, 12).map(x => `<tr><td><span class="tag${st.interno(x.cli) ? ' solve' : ''}">${esc(x.cli)}</span> ${esc(x.contra ? st.nome(x.contra) : 'sem contraparte')}<span class="sub" style="display:block;color:var(--muted);font-size:.78rem">${x.t} no período${x.atr ? ` · ${x.atr} com atraso` : ''}${x.nao ? ` · ${x.nao} não ${plural(x.nao, 'ocorreu', 'ocorreram')}` : ''}${x.pend ? ` · ${x.pend} ${plural(x.pend, 'atrasado', 'atrasados')}` : ''}</span></td><td class="num">${x.dia}</td><td class="num">${x.t - x.dia}</td><td class="num" style="${x.pct < 70 ? 'color:var(--bad);font-weight:600' : ''}">${x.pct}%</td></tr>`).join('')}</tbody></table></div>` : '<div class="empty small">O cumprimento aparece quando os primeiros compromissos chegarem à data.</div>'}
+      <p class="small muted" style="margin:10px 0 0">Conta pela data original: remarcar e fazer depois conta como atraso.</p>
+    </section>
+  </div>`;
+}
+
 /* ---------- Minha semana ---------- */
 function renderSemana() {
   const ab = st.acoes.filter(a => aberta(a) && st.nominal(a.resp));
   const cont = {}; ab.forEach(a => { cont[a.resp] = (cont[a.resp] || 0) + 1; });
-  const pes = Object.entries(cont).sort((a, b) => b[1] - a[1] || st.nome(a[0]).localeCompare(st.nome(b[0])));
+  const compAb = st.compromissos.filter(c => c.status === 'Pendente' && c.resp);
+  const contC = {}; compAb.forEach(c => { contC[c.resp] = (contC[c.resp] || 0) + 1; });
+  const pes = [...new Set([...Object.keys(cont), ...Object.keys(contC)])].map(k => [k, cont[k] || 0, contC[k] || 0])
+    .sort((a, b) => b[1] - a[1] || b[2] - a[2] || st.nome(a[0]).localeCompare(st.nome(b[0])));
   const eu = st.eu();
-  if (!S.pessoaSemana || !cont[S.pessoaSemana]) S.pessoaSemana = eu && cont[eu.id] ? eu.id : (pes[0] || [])[0];
+  const tem = k => !!(cont[k] || contC[k]);
+  if (!S.pessoaSemana || !tem(S.pessoaSemana)) S.pessoaSemana = eu && tem(eu.id) ? eu.id : (pes[0] || [])[0];
   if (!S.pessoaSemana) return '<div class="empty">Nenhuma ação aberta com responsável nominal.</div>';
   const p = S.pessoaSemana, minhas = sortAcoes(ab.filter(a => a.resp === p));
+  const meusComp = sortComp(compAb.filter(c => c.resp === p && c.data && c.data <= LIM7));
   const varios = new Set(minhas.map(a => a.cli)).size > 1;
   const sec = [['Vencidas', minhas.filter(a => situacao(a).o === 1)], [`Vencem até ${fmt(LIM7)}`, minhas.filter(a => situacao(a).o === 2)], ['Sem prazo', minhas.filter(a => situacao(a).o === 3)], ['Depois', minhas.filter(a => situacao(a).o === 4)]];
   return `
   <p class="lede-sub" style="margin:0">O que vence, o que atrasou e o que depende de cada pessoa, em todos os clientes. A mensagem de cobrança sai pronta para o WhatsApp.</p>
-  <div class="toolbar"><label class="small muted" for="selP">Ver como</label><select id="selP">${pes.map(([n, c]) => `<option value="${esc(n)}"${n === p ? ' selected' : ''}>${esc(st.nome(n))}${st.pessoa(n) && st.pessoa(n).empresa === 'Solve' ? ' (Solve)' : ''} · ${c}</option>`).join('')}</select>${eu && p === eu.id ? '<span class="pill acc">você</span>' : ''}</div>
+  <div class="toolbar"><label class="small muted" for="selP">Ver como</label><select id="selP">${pes.map(([n, c, k]) => `<option value="${esc(n)}"${n === p ? ' selected' : ''}>${esc(st.nome(n))}${st.pessoa(n) && st.pessoa(n).empresa === 'Solve' ? ' (Solve)' : ''} · ${c} ${plural(c, 'ação', 'ações')}${k ? `, ${k} ${plural(k, 'compromisso', 'compromissos')}` : ''}</option>`).join('')}</select>${eu && p === eu.id ? '<span class="pill acc">você</span>' : ''}</div>
   <div class="grid3">
-    <div class="stack">${sec.filter(s => s[1].length).map(([t, l]) => `<section class="panel"><header><h2>${t}</h2><span class="small muted">${l.length}</span></header>${quickTable(l, varios)}</section>`).join('') || '<div class="empty">Nenhuma ação aberta.</div>'}</div>
+    <div class="stack">${meusComp.length ? `<section class="panel"><header><h2>Compromissos até ${fmt(LIM7)}</h2><a class="btn sm ghost" style="text-decoration:none" href="#agenda?p=${encodeURIComponent(p)}">Ver todos</a></header>${compRows(meusComp, false)}</section>` : ''}${sec.filter(s => s[1].length).map(([t, l]) => `<section class="panel"><header><h2>${t}</h2><span class="small muted">${l.length}</span></header>${quickTable(l, varios)}</section>`).join('') || '<div class="empty">Nenhuma ação aberta.</div>'}</div>
     <section class="panel"><header><h2>Mensagem de cobrança</h2><button class="btn sm" data-do="copiarCob">Copiar</button></header><textarea class="out" id="cobTxt" readonly aria-label="Mensagem de cobrança" style="min-height:260px">${esc(cobranca(p, sec, varios))}</textarea></section>
   </div>`;
 }
@@ -619,9 +715,11 @@ function cobranca(p, sec, varios) {
 const FOCAVEIS = 'button:not([disabled]),[href],input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])';
 function lembrar(el) {
   if (!el || el === document.body) return null;
-  const b = el.closest('[data-acao],[data-do],[data-q]');
+  const b = el.closest('[data-acao],[data-comp],[data-do],[data-q],[data-c]');
   let sel = null;
-  if (b && b.dataset.acao) sel = `button[data-acao="${CSS.escape(b.dataset.acao)}"]`;
+  if (b && b.dataset.comp) sel = `button[data-comp="${CSS.escape(b.dataset.comp)}"]`;
+  else if (b && b.dataset.c) sel = `[data-c="${CSS.escape(b.dataset.c)}"][data-id="${CSS.escape(b.dataset.id || '')}"]`;
+  else if (b && b.dataset.acao) sel = `button[data-acao="${CSS.escape(b.dataset.acao)}"]`;
   else if (b && b.dataset.q) sel = `[data-q="${CSS.escape(b.dataset.q)}"][data-id="${CSS.escape(b.dataset.id || '')}"]`;
   else if (b && b.dataset.do) sel = `[data-do="${CSS.escape(b.dataset.do)}"]`;
   return { el, sel };
@@ -653,7 +751,40 @@ function prenderFoco(e) {
   if (e.shiftKey && (document.activeElement === first || !dlg.contains(document.activeElement))) { e.preventDefault(); last.focus(); }
   else if (!e.shiftKey && (document.activeElement === last || !dlg.contains(document.activeElement))) { e.preventDefault(); first.focus(); }
 }
+function compDrawerHtml() {
+  const { comp, modo } = S.drawer, c = st.compromisso(comp);
+  if (!c) return '';
+  const s = sitComp(c), serie = st.serieDe(c), aberto = c.status === 'Pendente';
+  const outras = serie.filter(x => x !== c).slice(-6).reverse();
+  const podePend = aberto && !c.demanda && !st.interno(c.cli);
+  let form = '';
+  if (modo === 'remarcar') form = `<form id="fRem" class="form boxed">
+      <div class="field"><label for="rcData">Nova data</label><input type="date" id="rcData" required min="${HOJE}" value="${c.data && c.data >= HOJE ? c.data : ''}"></div>
+      <div class="field"><label for="rcHora">Hora (opcional)</label><input type="time" id="rcHora" value="${esc(c.hora)}"></div>
+      <div class="full small muted">Remarcar não pede motivo. A data original continua valendo para medir o cumprimento${c.rec !== 'Única' ? ' e para a próxima repetição' : ''}.</div>
+      <div class="full row-actions"><button class="btn primary" type="submit">Salvar nova data</button><button class="btn" type="button" data-do="modo" data-m="">Voltar</button><span class="small err-text" id="rcErr" role="alert"></span></div></form>`;
+  return `<aside class="drawer" role="dialog" aria-modal="true" aria-labelledby="dwT">
+    <div class="dh"><div style="min-width:0"><div class="label mono">${esc(c.id)} · ${esc(cliNome(c.cli))}</div><h2 id="dwT" tabindex="-1" style="margin-top:4px">${esc(c.oque)}</h2><div style="margin-top:8px" class="row-actions">${pill(s)}<span class="pill ok">${esc(c.status)}</span>${sugerePendencia(c) ? '<span class="pill acc">virar pendência?</span>' : ''}</div></div><button class="btn sm ghost xbtn" data-do="fechar" aria-label="Fechar">✕</button></div>
+    <div class="db">
+      <dl class="w5">
+        <dt>O QUÊ</dt><dd>${esc(c.oque)} <span class="tag">${esc(c.tipo)}</span></dd>
+        <dt>COM QUEM</dt><dd>${c.contra ? esc(contraNome(c)) : '<span class="muted">—</span>'}</dd>
+        <dt>QUANDO</dt><dd>${fmtF(c.data)}${c.hora ? ' às ' + esc(c.hora) : ''}${c.dataOrig && c.dataOrig !== c.data ? `<span class="sub">data original ${fmtF(c.dataOrig)}</span>` : ''}${c.realizado ? `<span class="sub">${c.status === 'Feito' ? 'feito' : 'fechado'} em ${fmtF(c.realizado)}</span>` : ''}</dd>
+        <dt>QUEM</dt><dd>${respHtml(c.resp)}</dd>
+        <dt>REPETE</dt><dd>${c.rec === 'Única' ? 'Não' : c.rec + (aberto ? ` · a próxima é criada ao fechar esta (${fmt(st.proximaDe(c))})` : '')}</dd>
+      </dl>
+      ${c.demanda ? `<div class="panel" style="padding:12px;background:var(--surface-2)"><div class="label">Virou pendência</div><button class="linkbtn" data-dem-go="${esc(c.demanda)}" data-cli-set="${esc(c.cli)}" style="margin-top:4px">${esc(st.demanda(c.demanda) ? st.demanda(c.demanda).titulo : c.demanda)}</button></div>` : ''}
+      <form id="fRes" class="form"><div class="field full"><label for="cRes">Resultado${aberto ? ' (opcional, gravado ao fechar)' : ''}</label><textarea id="cRes" maxlength="2000" placeholder="Ex.: Layra enviou só o PIS; COFINS fica para segunda">${esc(c.resultado)}</textarea></div>
+        ${aberto ? '' : '<div class="full row-actions"><button class="btn sm" type="submit">Salvar resultado</button></div>'}</form>
+      ${outras.length ? `<div><div class="label" style="margin-bottom:6px">Outras vezes desta série</div><div class="hist">${outras.map(x => `<div><button class="linkbtn" data-comp="${esc(x.id)}">${fmtF(quando(x))}</button> · ${pill(sitComp(x))}${x.resultado ? `<br><span class="muted">${esc(x.resultado)}</span>` : ''}</div>`).join('')}</div></div>` : ''}
+      ${c.registro ? `<div class="small muted">Registrado em ${fmtF(c.registro)}${c.por ? ' por ' + esc(c.por) : ''}</div>` : ''}
+      ${form}
+    </div>
+    ${aberto && !modo ? `<div class="df"><button class="btn primary" data-do="compFeito">Feito</button><button class="btn" data-do="compNao">Não ocorreu</button><button class="btn" data-do="modo" data-m="remarcar">Remarcar</button>${podePend ? '<button class="btn" data-do="virarPend">Virar pendência</button>' : ''}<button class="btn danger ghost" data-do="compCancelar">${c.rec === 'Única' ? 'Cancelar' : 'Encerrar repetição'}</button></div>` : ''}
+  </aside>`;
+}
 function drawerHtml() {
+  if (S.drawer.comp) return compDrawerHtml();
   const { id, modo } = S.drawer, a = st.acao(id);
   if (!a) return '';
   const d = st.demanda(a.demanda), fr = d && d.frente ? st.frente(d.frente) : null, s = situacao(a);
@@ -728,7 +859,37 @@ function entregaModalHtml() {
     </form>
   </div>`;
 }
+function compModalHtml() {
+  const cli = S.modal.cli, eu = st.eu();
+  const pes = st.pessoasPara(cli), cl = st.cliente(cli);
+  const resp = S.modal.resp || (eu && pes.some(p => p.id === eu.id) ? eu.id : cl && pes.some(p => p.id === cl.consultor) ? cl.consultor : '');
+  return `<div class="modal" role="dialog" aria-modal="true" aria-labelledby="mT">
+    ${cabModal('Novo compromisso')}
+    <form id="fComp" class="form">
+      <div class="field full"><label for="cCli">Cliente</label><select id="cCli">${clientesComp().map(c => `<option value="${esc(c.id)}"${c.id === cli ? ' selected' : ''}>${esc(c.nome)}</option>`).join('')}</select></div>
+      <div class="field full"><label for="cOque">O quê</label><input id="cOque" required maxlength="255" autocomplete="off" placeholder="Ex.: Solicitar a Layra a apuração de PIS e COFINS todo dia 05"><span class="small muted" id="cHint" aria-live="polite">Escreva como falaria: data, hora, “com fulano”, “todo dia 05” ou “toda segunda” preenchem os campos sozinhos.</span></div>
+      <div class="field"><label for="cContra">Com quem</label><input id="cContra" list="cContraL" maxlength="255" autocomplete="off" placeholder="Pessoa do cliente ou da Solve"><datalist id="cContraL">${st.contrapartes(cli).map(p => `<option value="${esc(p.nome)}">`).join('')}</datalist></div>
+      <div class="field"><label for="cResp">Quem cumpre</label><select id="cResp" required><option value="">Escolha</option>${pes.map(p => `<option value="${esc(p.id)}"${p.id === resp ? ' selected' : ''}>${esc(p.nome)}${p.empresa === 'Solve' ? ' (Solve)' : ''}</option>`).join('')}</select></div>
+      <div class="field"><label for="cData">Data</label><input type="date" id="cData" required min="${HOJE}"></div>
+      <div class="field"><label for="cHora">Hora (opcional)</label><input type="time" id="cHora"></div>
+      <div class="field"><label for="cRec">Repete</label><select id="cRec">${REPETICOES.map(r => `<option>${r}</option>`).join('')}</select></div>
+      <div class="field"><label for="cTipo">Tipo</label><select id="cTipo">${TIPOS_COMP.map(r => `<option${r === 'Outro' ? ' selected' : ''}>${r}</option>`).join('')}</select></div>
+      <div class="full row-actions"><button class="btn primary" type="submit">Registrar compromisso</button><span class="small err-text" id="cErr" role="alert"></span></div>
+    </form>
+    <p class="small muted" style="margin:0">Compromisso é um passo só, com data, que não muda o rumo do cliente se atrasar um dia. Se precisa de mais de um passo, de um dono no cliente ou de análise de causa, registre como ação.</p>
+  </div>`;
+}
+// Preenche data, hora, repetição, tipo e "com quem" a partir do texto, sem mexer no que a pessoa já escolheu à mão.
+function lerCompTexto() {
+  const i = $('#cOque'); if (!i) return;
+  const cli = $('#cCli').value, r = lerLinha(i.value, st.contrapartes(cli), HOJE);
+  const pos = (id, v) => { const el = $('#' + id); if (el && !el.dataset.manual && v) el.value = v; };
+  pos('cData', r.data); pos('cHora', r.hora); pos('cRec', r.rec); pos('cTipo', r.tipo !== 'Outro' ? r.tipo : null); pos('cContra', r.contraNome);
+  const achou = r.data || r.hora || r.rec;
+  $('#cHint').textContent = achou && r.texto ? `Vai gravar: “${r.texto}”${r.data ? ' · ' + fmtF(r.data) : ''}${r.hora ? ' às ' + r.hora : ''}${r.rec ? ' · repete ' + r.rec.toLowerCase() : ''}` : 'Escreva como falaria: data, hora, “com fulano”, “todo dia 05” ou “toda segunda” preenchem os campos sozinhos.';
+}
 function modalHtml() {
+  if (S.modal.kind === 'comp') return compModalHtml();
   if (S.modal.kind === 'frente') return frenteModalHtml();
   if (S.modal.kind === 'entrega') return entregaModalHtml();
   const cli = S.modal.cli || S.cli;
@@ -736,19 +897,21 @@ function modalHtml() {
   const pes = st.pessoasPara(cli);
   const dems = demandasC(cli).filter(d => d.id === pre || !d.encerrada).sort((a, b) => a.titulo.localeCompare(b.titulo));
   const areaPre = pre && st.demanda(pre) ? st.demanda(pre).area : '';
+  const pf = S.modal.pre || {};
   return `<div class="modal" role="dialog" aria-modal="true" aria-labelledby="mT">
-    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px"><h2 id="mT" tabindex="-1">Nova ação</h2><button class="btn sm ghost xbtn" data-do="fechar" aria-label="Fechar">✕</button></div>
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px"><h2 id="mT" tabindex="-1">${S.modal.comp ? 'Virar pendência' : 'Nova ação'}</h2><button class="btn sm ghost xbtn" data-do="fechar" aria-label="Fechar">✕</button></div>
     <form id="fNova" class="form">
       <div class="field full"><label for="mCli">Cliente</label><select id="mCli">${clientesOrd().map(c => `<option value="${esc(c.id)}"${c.id === cli ? ' selected' : ''}>${esc(c.nome)}</option>`).join('')}</select></div>
-      <div class="field full"><label for="mAcao">O quê (ação)</label><input id="mAcao" required maxlength="255" placeholder="Verbo no infinitivo + objeto. Ex.: Enviar a posição do estoque de outubro"></div>
-      <div class="field full"><label for="mPq">Por quê (problema ou causa)</label><input id="mPq" maxlength="255"></div>
+      <div class="field full"><label for="mAcao">O quê (ação)</label><input id="mAcao" required maxlength="255" value="${esc(pf.acao || '')}" placeholder="Verbo no infinitivo + objeto. Ex.: Enviar a posição do estoque de outubro"></div>
+      <div class="field full"><label for="mPq">Por quê (problema ou causa)</label><input id="mPq" maxlength="255" value="${esc(pf.porque || '')}"></div>
       <div class="field full"><label for="mDem">Demanda</label><select id="mDem"><option value="">Nova pendência com o mesmo título</option>${dems.map(d => `<option value="${esc(d.id)}"${d.id === pre ? ' selected' : ''}>${esc(d.titulo)}</option>`).join('')}</select></div>
-      <div class="field"><label for="mResp">Quem</label><select id="mResp" required><option value="">Escolha</option>${pes.map(p => `<option value="${esc(p.id)}">${esc(p.nome)}${p.empresa === 'Solve' ? ' (Solve)' : ''}</option>`).join('')}</select></div>
+      <div class="field"><label for="mResp">Quem</label><select id="mResp" required><option value="">Escolha</option>${pes.map(p => `<option value="${esc(p.id)}"${p.id === pf.resp ? ' selected' : ''}>${esc(p.nome)}${p.empresa === 'Solve' ? ' (Solve)' : ''}</option>`).join('')}</select></div>
       <div class="field"><label for="mPrazo">Prazo</label><input type="date" id="mPrazo" required min="${HOJE}"></div>
       <div class="field"><label for="mArea">Onde (área)</label><select id="mArea" required><option value="">Escolha</option>${AREAS.map(a => `<option${a === areaPre ? ' selected' : ''}>${esc(a)}</option>`).join('')}</select></div>
       <div class="field"><label for="mComo">Como (opcional)</label><input id="mComo" maxlength="500"></div>
       <div class="full row-actions"><button class="btn primary" type="submit">Registrar ação</button><span class="small err-text" id="mErr" role="alert"></span></div>
     </form>
+    ${S.modal.comp ? `<p class="small muted" style="margin:0">Cria uma pendência nova com esta ação e liga o compromisso ${esc(S.modal.comp)} a ela. O compromisso continua na agenda até ser fechado.</p>` : ''}
     <p class="small muted" style="margin:0">Ação sem dono nominal ou sem prazo não entra: é a regra que evita repetir o problema da planilha. Se a pessoa não aparece na lista, cadastre-a em GP_Pessoas.</p>
   </div>`;
 }
@@ -778,7 +941,7 @@ async function grava(fn, okMsg, undo) {
   let falhou = false;
   try {
     const r = await fn();
-    toast(typeof okMsg === 'function' ? okMsg(r) : okMsg, false, undo);
+    toast(typeof okMsg === 'function' ? okMsg(r) : okMsg, false, undo && undo.length ? () => undo(r) : undo);
   } catch (e) {
     console.error(e);
     falhou = true;
@@ -806,6 +969,11 @@ async function recarregar(silencioso) {
     render();
   }
 }
+const fecharComp = (c, status, resultado) => {
+  const msg = { Feito: 'feito', 'Não ocorreu': 'marcado como não ocorrido', Cancelado: 'cancelado' }[status];
+  grava(() => st.fecharCompromisso(c, status, resultado), r => `${c.id} ${msg}${r.prox ? `; próxima vez em ${fmt(r.prox.data)}` : ''}`,
+    r => grava(() => st.desfazerFechamento(c, r.ant, r.prox), `${c.id} voltou para pendente`));
+};
 const concluirComDesfazer = a => {
   const antes = a.status;
   grava(() => st.concluir(a), `${a.id} concluída`, () => grava(() => st.desfazerConclusao(a, antes), `${a.id} voltou para ${antes === 'Não iniciada' ? 'não iniciada' : 'em andamento'}`));
@@ -822,7 +990,7 @@ const atualizarEstadoAta = () => { const el = $('#ataEstado'); if (el) el.innerH
 /* ---------- eventos ---------- */
 function onClick(e) {
   const acct = $('#acct'); if (acct && acct.open && !e.target.closest('#acct')) acct.open = false;
-  const t = e.target.closest('button, a, tr[data-acao], tr[data-cli-go], [data-do]');
+  const t = e.target.closest('button, a, tr[data-acao], tr[data-comp], tr[data-cli-go], [data-do]');
   if (!t) return;
   const ds = t.dataset;
   if (ds.tema) { aplicarTema(ds.tema); render(); const b = document.querySelector(`#${t.closest('.tema').id} [data-tema="${ds.tema}"]`); if (b) b.focus(); return; }
@@ -837,11 +1005,34 @@ function onClick(e) {
   if (ds.step !== undefined) { S.step = +ds.step; render(); window.scrollTo({ top: 0 }); return; }
   if (ds.q === 'concluir') { e.stopPropagation(); const a = st.acao(ds.id); if (a) concluirComDesfazer(a); return; }
   if (ds.q === 'reprog') { e.stopPropagation(); S.drawer = { id: ds.id, modo: 'reprog' }; renderLayer(); const i = $('#rPrazo'); if (i) i.focus(); return; }
+  if (ds.c === 'feito') { e.stopPropagation(); const c = st.compromisso(ds.id); if (c) fecharComp(c, 'Feito'); return; }
+  if (ds.c === 'remarcar') { e.stopPropagation(); S.modal = null; S.drawer = { comp: ds.id, modo: 'remarcar' }; renderLayer(); const i = $('#rcData'); if (i) i.focus(); return; }
+  if (ds.fcVer) { S.fc.ver = ds.fcVer; render(); return; }
+  if (ds.comp) { S.modal = null; S.drawer = { comp: ds.comp, modo: null }; renderLayer(); return; }
   if (ds.acao) { abrirAcao(ds.acao); return; }
   if (ds.go) { if (ds.fd) S.fd = { tipo: 'todas', st: ds.fd }; go(ds.go); return; }
   switch (ds.do) {
     case 'fechar': fechar(); break;
-    case 'modo': S.drawer.modo = ds.m || null; renderLayer(); { const i = $(ds.m === 'cancel' ? '#cMot' : '#rPrazo'); if (i) i.focus(); } break;
+    case 'modo': S.drawer.modo = ds.m || null; renderLayer(); { const i = $(ds.m === 'cancel' ? '#cMot' : ds.m === 'remarcar' ? '#rcData' : '#rPrazo'); if (i) i.focus(); } break;
+    case 'novoComp': {
+      const r = ROUTES[route()];
+      S.drawer = null; S.modal = { kind: 'comp', cli: (r.global ? S.fc.cli : '') || S.cli }; renderLayer(); { const i = $('#cOque'); if (i) i.focus(); } break;
+    }
+    case 'compFeito': case 'compNao': {
+      const c = st.compromisso(S.drawer.comp), res = $('#cRes') ? $('#cRes').value.trim() : undefined;
+      S.drawer = null; fecharComp(c, ds.do === 'compFeito' ? 'Feito' : 'Não ocorreu', res); break;
+    }
+    case 'compCancelar': {
+      const c = st.compromisso(S.drawer.comp);
+      if (!confirm(c.rec === 'Única' ? `Cancelar “${c.oque}”?` : `Cancelar esta vez e encerrar a repetição de “${c.oque}”? Nenhuma nova ocorrência será criada.`)) break;
+      S.drawer = null; fecharComp(c, 'Cancelado', $('#cRes') ? $('#cRes').value.trim() : undefined); break;
+    }
+    case 'virarPend': {
+      const c = st.compromisso(S.drawer.comp);
+      S.drawer = null;
+      S.modal = { dem: '', cli: c.cli, comp: c.id, pre: { acao: c.oque, porque: `Compromisso de ${fmtF(quando(c))} não cumprido (${c.id})`, resp: st.nominal(c.contra) && st.pessoasPara(c.cli).some(p => p.id === c.contra) ? c.contra : '' } };
+      renderLayer(); { const i = $('#mResp').value ? $('#mPrazo') : $('#mResp'); if (i) i.focus(); } break;
+    }
     case 'concluir': { const a = st.acao(S.drawer.id); concluirComDesfazer(a); break; }
     case 'iniciar': { const a = st.acao(S.drawer.id); grava(() => st.iniciar(a), `${a.id} em andamento`); break; }
     case 'encerrarDem': { const d = st.demanda(ds.id); if (d) grava(() => st.encerrarDemanda(d), 'Demanda encerrada', () => grava(() => st.reabrirDemanda(d), 'Demanda reaberta')); break; }
@@ -885,10 +1076,12 @@ function onSubmit(e) {
     if (!acao || !resp || !prazo || !$('#mArea').value) { $('#mErr').textContent = 'Preencha ação, responsável, prazo e área.'; return; }
     if (prazo < HOJE) { $('#mErr').textContent = 'O prazo precisa ser a partir de hoje.'; return; }
     if (!st.nominal(resp)) { $('#mErr').textContent = 'Escolha uma pessoa, não uma empresa ou setor.'; return; }
+    const comp = S.modal.comp ? st.compromisso(S.modal.comp) : null;
     grava(async () => {
-      const a = await st.novaAcao({ cli, acao, porque: $('#mPq').value.trim(), dem: $('#mDem').value, resp, prazo, area: $('#mArea').value, como: $('#mComo').value.trim(), origem: 'Captura rápida' });
+      const a = await st.novaAcao({ cli, acao, porque: $('#mPq').value.trim(), dem: $('#mDem').value, resp, prazo, area: $('#mArea').value, como: $('#mComo').value.trim(), origem: comp ? 'Compromisso' : 'Captura rápida' });
+      if (comp) await st.ligarDemanda(comp, a.demanda);
       S.modal = null; S.cli = cli; return a;
-    }, a => `Ação ${a.id} registrada`);
+    }, a => comp ? `Pendência ${a.demanda} criada com a ação ${a.id}` : `Ação ${a.id} registrada`);
   }
   if (f.id === 'fFrente') {
     const cli = $('#nfCli').value, nome = $('#nfNome').value.trim(), dono = $('#nfDono').value, area = $('#nfArea').value;
@@ -916,6 +1109,30 @@ function onSubmit(e) {
       return d;
     }, d => `Entrega ${d.id} criada. Agora registre a primeira ação.`);
   }
+  if (f.id === 'fComp') {
+    const cli = $('#cCli').value, bruto = $('#cOque').value.trim(), resp = $('#cResp').value, data = $('#cData').value;
+    if (!bruto || !resp || !data) { $('#cErr').textContent = 'Preencha o quê, quem cumpre e a data.'; return; }
+    if (data < HOJE) { $('#cErr').textContent = 'A data precisa ser a partir de hoje.'; return; }
+    if (!st.nominal(resp)) { $('#cErr').textContent = 'Escolha uma pessoa, não uma empresa ou setor.'; return; }
+    const lido = lerLinha(bruto, st.contrapartes(cli), HOJE);
+    const oque = (lido.data || lido.hora || lido.rec) && lido.texto ? lido.texto : bruto;
+    const nomeC = $('#cContra').value.trim();
+    const pc = nomeC && st.contrapartes(cli).find(p => p.nome.toLowerCase() === nomeC.toLowerCase());
+    grava(async () => {
+      const c = await st.novoCompromisso({ cli, oque, tipo: $('#cTipo').value, resp, contra: pc ? pc.id : nomeC, data, hora: $('#cHora').value, rec: $('#cRec').value });
+      S.modal = null; return c;
+    }, c => `Compromisso ${c.id} registrado para ${fmtF(c.data)}`);
+  }
+  if (f.id === 'fRem') {
+    const c = st.compromisso(S.drawer.comp), d = $('#rcData').value, h = $('#rcHora').value;
+    if (!d || d < HOJE) { $('#rcErr').textContent = 'Escolha uma data a partir de hoje.'; return; }
+    grava(async () => { await st.remarcarCompromisso(c, d, h); S.drawer = { comp: c.id, modo: null }; }, `${c.id} remarcado para ${fmtF(d)}`);
+  }
+  if (f.id === 'fRes') {
+    const c = st.compromisso(S.drawer.comp);
+    if (c.status === 'Pendente') return;
+    grava(() => st.salvarResultado(c, $('#cRes').value.trim()), 'Resultado salvo');
+  }
   if (f.id === 'fDelib') {
     const texto = $('#dTexto').value.trim(), gera = $('#dGera').checked, resp = $('#dResp').value, prazo = $('#dPrazo').value, dem = $('#dDem').value;
     if (!texto) { $('#dErr').textContent = 'Escreva o que foi decidido.'; return; }
@@ -925,6 +1142,8 @@ function onSubmit(e) {
   }
 }
 function onInput(e) {
+  if (e.target.id === 'cOque') { lerCompTexto(); return; }
+  if (['cData', 'cHora', 'cRec', 'cTipo', 'cContra'].includes(e.target.id)) e.target.dataset.manual = '1';
   if (e.target.id === 'fq') { S.fa.q = e.target.value; clearTimeout(buscaT); buscaT = setTimeout(render, 200); }
   if (e.target.id === 'ataTxt' || e.target.id === 'ataPart') {
     S.ataRascunho = { cli: S.cli, texto: $('#ataTxt').value, part: $('#ataPart').value };
@@ -939,7 +1158,18 @@ function onChange(e) {
   if (id === 'farea') { S.fa.area = e.target.value; render(); }
   if (id === 'ftipo') { S.fa.tipo = e.target.value; render(); }
   if (id === 'selP') { S.pessoaSemana = e.target.value; render(); }
-  if (id === 'mCli') { S.modal = { cli: e.target.value, dem: '' }; renderLayer(); }
+  if (id === 'cP') { S.fc.p = e.target.value; render(); }
+  if (id === 'cCliF') { S.fc.cli = e.target.value; render(); }
+  if (['cData', 'cHora', 'cRec', 'cTipo'].includes(id)) e.target.dataset.manual = '1';
+  if (id === 'cCli') {
+    const ids = ['cOque', 'cContra', 'cData', 'cHora', 'cRec', 'cTipo'];
+    const keep = ids.map(k => [k, $('#' + k).value, $('#' + k).dataset.manual]);
+    const resp = $('#cResp').value;
+    S.modal = { kind: 'comp', cli: e.target.value, resp }; renderLayer();
+    keep.forEach(([k, v, man]) => { const el = $('#' + k); el.value = v; if (man) el.dataset.manual = man; });
+    lerCompTexto();
+  }
+  if (id === 'mCli') { S.modal = { cli: e.target.value, dem: '', comp: S.modal.comp, pre: S.modal.pre }; renderLayer(); }
   if (id === 'nfCli') {
     const keep = ['nfNome', 'nfEnt', 'nfArea', 'nfIni', 'nfFim', 'nfApoio'].map(k => [k, $('#' + k).value]);
     S.modal = { kind: 'frente', cli: e.target.value }; renderLayer();

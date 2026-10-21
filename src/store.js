@@ -4,7 +4,7 @@ export const AREAS = ['Administrativo', 'Comercial', 'Compras', 'Controladoria',
   'Faturamento', 'Financeiro', 'Fiscal', 'Logística', 'Manutenção', 'Obras', 'Produção', 'Recursos Humanos', 'Técnico', 'Tecnologia'];
 
 export const LISTS = {
-  GP_Clientes: ['Title', 'Nome', 'ConsultorCodigo', 'SupervisorCodigo', 'Situacao', 'NaNovaBase', 'PastaSharePoint', 'ArquivoOrigem'],
+  GP_Clientes: ['Title', 'Nome', 'ConsultorCodigo', 'SupervisorCodigo', 'Situacao', 'NaNovaBase', 'PastaSharePoint', 'ArquivoOrigem', 'Interno'],
   GP_Pessoas: ['Title', 'Nome', 'ClienteCodigo', 'Empresa', 'Nominal', 'Email', 'WhatsApp', 'Ativo'],
   GP_Frentes: ['Title', 'ClienteCodigo', 'Nome', 'Area', 'DonoCodigo', 'Apoio', 'Inicio', 'FimPrevisto', 'Encerrada', 'DataEncerramento', 'StatusOrigem', 'NotaMigracao'],
   GP_Demandas: ['Title', 'ClienteCodigo', 'Assunto', 'Tipo', 'FrenteCodigo', 'Prioridade', 'ResponsavelCodigo', 'Area', 'PrazoDemanda', 'Encerrada', 'DataEncerramento', 'Origem', 'StatusOrigem', 'NotaMigracao'],
@@ -13,8 +13,14 @@ export const LISTS = {
   GP_Foruns: ['Title', 'ClienteCodigo', 'Data', 'ConduzidoPor', 'Participantes', 'Ata'],
   GP_Deliberacoes: ['Title', 'ClienteCodigo', 'ForumCodigo', 'Texto', 'Tipo', 'ResponsavelCodigo', 'DemandaCodigo', 'AcaoCodigo', 'Data'],
   GP_Indicadores: ['Title', 'ClienteCodigo', 'Area', 'Nome', 'Formula', 'Unidade', 'Polaridade', 'Frequencia', 'ResponsavelCodigo', 'Situacao'],
-  GP_Medicoes: ['Title', 'IndicadorCodigo', 'ClienteCodigo', 'Mes', 'Meta', 'Realizado', 'Comentario']
+  GP_Medicoes: ['Title', 'IndicadorCodigo', 'ClienteCodigo', 'Mes', 'Meta', 'Realizado', 'Comentario'],
+  GP_Compromissos: ['Title', 'ClienteCodigo', 'OQue', 'Tipo', 'ResponsavelCodigo', 'ContraparteCodigo', 'Data', 'DataOriginal', 'Hora', 'Recorrencia',
+    'Status', 'DataRealizacao', 'Resultado', 'SerieCodigo', 'DemandaCodigo', 'Registro', 'RegistradoPor']
 };
+// Listas que o app tolera não encontrar (o resto do app segue funcionando sem elas).
+const OPCIONAIS = new Set(['GP_Compromissos']);
+export const TIPOS_COMP = ['Solicitar', 'Entregar', 'Reunião', 'Outro'];
+export const REPETICOES = ['Única', 'Semanal', 'Mensal'];
 
 // Datas: o SharePoint guarda ao meio-dia UTC para não mudar de dia no fuso de Brasília.
 export const d10 = v => (v ? String(v).slice(0, 10) : null);
@@ -39,12 +45,17 @@ export class Store {
 
   clear() {
     this.clientes = []; this.pessoas = []; this.frentes = []; this.demandas = []; this.acoes = [];
-    this.reprog = []; this.foruns = []; this.delib = []; this.indicadores = []; this.medicoes = [];
+    this.reprog = []; this.foruns = []; this.delib = []; this.indicadores = []; this.medicoes = []; this.compromissos = [];
   }
 
   async load() {
     const names = Object.keys(LISTS);
-    const res = await Promise.all(names.map(n => this.be.items(n, LISTS[n])));
+    const faltando = [];
+    const res = await Promise.all(names.map(n => this.be.items(n, LISTS[n]).catch(e => {
+      if (OPCIONAIS.has(n) && /não foi encontrada/.test(e.message || '')) { faltando.push(n); return []; }
+      throw e;
+    })));
+    this.faltando = faltando;
     const raw = Object.fromEntries(names.map((n, i) => [n, res[i]]));
     this.build(raw);
     this.loadedAt = new Date();
@@ -55,7 +66,7 @@ export class Store {
     const F = it => it.fields || {};
     this.clientes = raw.GP_Clientes.map(it => { const f = F(it); return {
       itemId: it.id, etag: it.etag, id: f.Title, nome: f.Nome || f.Title, consultor: f.ConsultorCodigo || null, supervisor: f.SupervisorCodigo || null,
-      situacao: f.Situacao || 'Ativo', naNovaBase: !!f.NaNovaBase, pasta: f.PastaSharePoint || '', arquivo: f.ArquivoOrigem || '' }; })
+      situacao: f.Situacao || 'Ativo', naNovaBase: !!f.NaNovaBase, pasta: f.PastaSharePoint || '', arquivo: f.ArquivoOrigem || '', interno: !!f.Interno }; })
       .sort((a, b) => a.nome.localeCompare(b.nome));
     this.pessoas = raw.GP_Pessoas.map(it => { const f = F(it); return {
       itemId: it.id, etag: it.etag, id: f.Title, nome: f.Nome || f.Title, cli: f.ClienteCodigo || null, empresa: f.Empresa || 'Cliente',
@@ -92,6 +103,15 @@ export class Store {
     this.medicoes = raw.GP_Medicoes.map(it => { const f = F(it); return {
       itemId: it.id, etag: it.etag, id: f.Title, indicador: f.IndicadorCodigo, cli: f.ClienteCodigo, mes: d10(f.Mes),
       meta: f.Meta ?? null, realizado: f.Realizado ?? null, comentario: f.Comentario || '' }; });
+    this.compromissos = (raw.GP_Compromissos || []).map(it => this.comp(it));
+  }
+
+  comp(it) {
+    const f = it.fields || {};
+    return { itemId: it.id, etag: it.etag, id: f.Title, cli: f.ClienteCodigo, oque: f.OQue || f.Title, tipo: f.Tipo || 'Outro',
+      resp: f.ResponsavelCodigo || null, contra: f.ContraparteCodigo || '', data: d10(f.Data), dataOrig: d10(f.DataOriginal) || d10(f.Data),
+      hora: f.Hora || '', rec: f.Recorrencia || 'Única', status: f.Status || 'Pendente', realizado: d10(f.DataRealizacao), resultado: f.Resultado || '',
+      serie: f.SerieCodigo || null, demanda: f.DemandaCodigo || null, registro: d10(f.Registro), por: f.RegistradoPor || '' };
   }
 
   // ---------- consultas ----------
@@ -99,6 +119,18 @@ export class Store {
   nome(code) { const p = this.pessoa(code); return p ? p.nome : (code || ''); }
   nominal(code) { const p = this.pessoa(code); return !!(p && p.nominal); }
   cliente(code) { return this.clientes.find(c => c.id === code) || null; }
+  interno(code) { const c = this.cliente(code); return !!(c && c.interno); }
+  compromisso(id) { return this.compromissos.find(c => c.id === id) || null; }
+  // Ocorrências da mesma série (compromisso que se repete), da mais antiga para a mais nova.
+  serieDe(c) {
+    if (!c || !c.serie) return c ? [c] : [];
+    return this.compromissos.filter(x => x.serie === c.serie).sort((a, b) => (a.dataOrig || '').localeCompare(b.dataOrig || '') || a.id.localeCompare(b.id, 'pt', { numeric: true }));
+  }
+  // Pessoas que podem ser "com quem" num compromisso: as do cliente e as da Solve, nominais ou não.
+  contrapartes(cli) {
+    return this.pessoas.filter(p => p.ativo && (p.cli === cli || p.empresa === 'Solve') && p.id !== 'SOLVE')
+      .sort((a, b) => (a.empresa === 'Solve') - (b.empresa === 'Solve') || a.nome.localeCompare(b.nome));
+  }
   acao(id) { return this.acoes.find(a => a.id === id) || null; }
   demanda(id) { return this.demandas.find(d => d.id === id) || null; }
   frente(id) { return this.frentes.find(f => f.id === id) || null; }
@@ -317,4 +349,161 @@ export class Store {
     if (participantes) fo.participantes = participantes;
     return fo;
   }
+
+  // ---------- compromissos (um passo só, com data; fora dos números de ações) ----------
+  async novoCompromisso({ cli, oque, tipo, resp, contra, data, hora, rec }) {
+    const hoje = hojeISO(), por = this.user.name || this.user.username || 'Solve';
+    const repete = rec && rec !== 'Única';
+    const f = { ClienteCodigo: cli, OQue: oque.slice(0, 255), Tipo: tipo || 'Outro', ResponsavelCodigo: resp, ContraparteCodigo: (contra || '').slice(0, 255),
+      Data: toSP(data), DataOriginal: toSP(data), Hora: hora, Recorrencia: rec || 'Única', Status: 'Pendente', Registro: toSP(hoje), RegistradoPor: por };
+    const { it, code } = await this.criar('GP_Compromissos', this.compromissos, u => this.proximo(u, `${cli}-C`, 4),
+      c => ({ Title: c, ...f, SerieCodigo: repete ? c : undefined }));
+    const x = this.comp({ id: it.id, etag: it.etag, fields: { ...f, Title: code, SerieCodigo: repete ? code : null } });
+    this.compromissos.push(x);
+    return x;
+  }
+
+  // Próxima ocorrência de um compromisso que se repete, nunca antes de hoje.
+  proximaDe(c) {
+    const serie = this.serieDe(c);
+    const base = serie[0] && serie[0].dataOrig ? Number(serie[0].dataOrig.slice(8, 10)) : null;
+    const hoje = hojeISO();
+    let d = proximaData(c.dataOrig || c.data, c.rec, base);
+    for (let i = 0; d && d < hoje && i < 400; i++) d = proximaData(d, c.rec, base);
+    return d;
+  }
+
+  async fecharCompromisso(c, status, resultado) {
+    const hoje = hojeISO();
+    const ant = { status: c.status, realizado: c.realizado, resultado: c.resultado };
+    const f = { Status: status, DataRealizacao: status === 'Cancelado' ? null : toSP(hoje) };
+    if (resultado !== undefined) f.Resultado = resultado || null;
+    await this.upd('GP_Compromissos', c, f);
+    c.status = status; c.realizado = status === 'Cancelado' ? null : hoje;
+    if (resultado !== undefined) c.resultado = resultado || '';
+    let prox = null;
+    if (status !== 'Cancelado' && c.rec !== 'Única' && c.serie) {
+      const quando = this.proximaDe(c);
+      const ja = quando && this.compromissos.find(x => x.serie === c.serie && x.dataOrig === quando);
+      if (quando && !ja) {
+        try {
+          prox = await this.criarOcorrencia(c, quando);
+        } catch (e) {
+          // Sem a próxima ocorrência a série se perderia: volta o compromisso ao estado anterior.
+          try { await this.upd('GP_Compromissos', c, { Status: ant.status, DataRealizacao: toSP(ant.realizado) || null, Resultado: ant.resultado || null }); } catch (x) { /* a releitura mostra o estado real */ }
+          c.status = ant.status; c.realizado = ant.realizado; c.resultado = ant.resultado;
+          throw e;
+        }
+      }
+    }
+    return { c, ant, prox };
+  }
+
+  async criarOcorrencia(c, data) {
+    const hoje = hojeISO(), por = this.user.name || this.user.username || 'Solve';
+    const f = { ClienteCodigo: c.cli, OQue: c.oque, Tipo: c.tipo, ResponsavelCodigo: c.resp, ContraparteCodigo: c.contra, Data: toSP(data), DataOriginal: toSP(data),
+      Hora: c.hora, Recorrencia: c.rec, Status: 'Pendente', SerieCodigo: c.serie, Registro: toSP(hoje), RegistradoPor: por };
+    const { it, code } = await this.criar('GP_Compromissos', this.compromissos, u => this.proximo(u, `${c.cli}-C`, 4), x => ({ Title: x, ...f }));
+    const x = this.comp({ id: it.id, etag: it.etag, fields: { ...f, Title: code } });
+    this.compromissos.push(x);
+    return x;
+  }
+
+  // Desfaz "feito"/"não ocorreu" feito por engano: apaga a ocorrência seguinte criada e volta para pendente.
+  async desfazerFechamento(c, ant, prox) {
+    if (prox) {
+      await this.be.remove('GP_Compromissos', prox.itemId);
+      this.compromissos = this.compromissos.filter(x => x !== prox);
+    }
+    await this.upd('GP_Compromissos', c, { Status: ant.status, DataRealizacao: toSP(ant.realizado) || null, Resultado: ant.resultado || null });
+    c.status = ant.status; c.realizado = ant.realizado; c.resultado = ant.resultado;
+  }
+
+  async remarcarCompromisso(c, data, hora) {
+    await this.upd('GP_Compromissos', c, { Data: toSP(data), Hora: hora || null });
+    c.data = data; c.hora = hora || '';
+  }
+
+  async salvarResultado(c, texto) {
+    await this.upd('GP_Compromissos', c, { Resultado: texto || null });
+    c.resultado = texto || '';
+  }
+
+  async ligarDemanda(c, dem) {
+    await this.upd('GP_Compromissos', c, { DemandaCodigo: dem });
+    c.demanda = dem;
+  }
+}
+
+// ---------- datas de compromissos que se repetem ----------
+// Semanal: +7 dias. Mensal: mesmo dia do mês seguinte (o dia da série; 31 vira o último dia em meses mais curtos).
+export function proximaData(iso, rec, diaBase) {
+  if (!iso || !rec || rec === 'Única') return null;
+  const [y, m, d] = iso.split('-').map(Number);
+  if (rec === 'Semanal') return new Date(Date.UTC(y, m - 1, d + 7)).toISOString().slice(0, 10);
+  const ult = new Date(Date.UTC(y, m + 1, 0)).getUTCDate();
+  return new Date(Date.UTC(y, m, Math.min(diaBase || d, ult))).toISOString().slice(0, 10);
+}
+
+// ---------- leitura de uma linha escrita como se fala ----------
+// "Solicitar a Layra o envio da apuração de PIS e COFINS no dia 05/11/2026"
+// -> { texto: "Solicitar a Layra o envio da apuração de PIS e COFINS", data: "2026-11-05", tipo: "Solicitar", contra: "MET-LAYRA-BRITO" }
+const semAcento = s => String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+const DIAS_SEM = ['domingo', 'segunda', 'terca', 'quarta', 'quinta', 'sexta', 'sabado'];
+const isoUTC = (y, m, d) => { const x = new Date(Date.UTC(y, m - 1, d)); return x.getUTCFullYear() === y && x.getUTCMonth() === m - 1 && x.getUTCDate() === d ? x.toISOString().slice(0, 10) : null; };
+const somaDias = (iso, n) => { const [y, m, d] = iso.split('-').map(Number); return new Date(Date.UTC(y, m - 1, d + n)).toISOString().slice(0, 10); };
+export function lerLinha(txt, pessoas = [], hoje = hojeISO()) {
+  let t = ' ' + String(txt || '').replace(/\s+/g, ' ').trim() + ' ';
+  const out = { texto: '', data: null, hora: null, tipo: 'Outro', rec: null, contra: null, contraNome: '' };
+  const tira = m => { t = t.slice(0, m.index) + ' ' + t.slice(m.index + m[0].length); };
+  let m;
+  const [hy, hm, hd] = hoje.split('-').map(Number);
+  // repetição
+  if ((m = /\s(?:todo|todos os|a cada)\s+(?:o\s+)?dias?\s+(\d{1,2})(?:\s+de\s+cada\s+m[eê]s|\s+do\s+m[eê]s)?(?=[\s,.;])/i.exec(t))) {
+    const dia = Number(m[1]);
+    if (dia >= 1 && dia <= 31) {
+      out.rec = 'Mensal';
+      let y = hy, mm = hm;
+      const em = (yy, mo) => isoUTC(yy, mo, Math.min(dia, new Date(Date.UTC(yy, mo, 0)).getUTCDate()));
+      let d = em(y, mm);
+      if (d < hoje) { mm++; if (mm > 12) { mm = 1; y++; } d = em(y, mm); }
+      out.data = d; tira(m);
+    }
+  } else if ((m = /\s(?:toda|todo|todas as|todos os)\s+(segunda|ter[cç]a|quarta|quinta|sexta|s[aá]bado|domingo)s?(?:-feira)?s?(?=[\s,.;])/i.exec(t))) {
+    out.rec = 'Semanal';
+    const alvo = DIAS_SEM.indexOf(semAcento(m[1]).replace(/s$/, ''));
+    const hojeDia = new Date(Date.UTC(hy, hm - 1, hd)).getUTCDay();
+    out.data = somaDias(hoje, (alvo - hojeDia + 7) % 7); tira(m);
+  } else if ((m = /\s(?:todo m[eê]s|mensalmente)(?=[\s,.;])/i.exec(t))) { out.rec = 'Mensal'; tira(m); }
+  else if ((m = /\s(?:toda semana|semanalmente)(?=[\s,.;])/i.exec(t))) { out.rec = 'Semanal'; tira(m); }
+  // data
+  if ((m = /\s(?:(?:no|para o|pro|até o|ate o|em|o)\s+)?(?:dia\s+)?(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?(?=[\s,.;])/i.exec(t))) {
+    let y = m[3] ? Number(m[3]) : hy; if (y < 100) y += 2000;
+    let d = isoUTC(y, Number(m[2]), Number(m[1]));
+    if (d && !m[3] && d < hoje) d = isoUTC(y + 1, Number(m[2]), Number(m[1]));
+    if (d) { out.data = d; tira(m); }
+  } else if ((m = /\s(?:para\s+)?(hoje|amanh[ãa])(?=[\s,.;])/i.exec(t))) {
+    out.data = /hoje/i.test(m[1]) ? hoje : somaDias(hoje, 1); tira(m);
+  }
+  // hora
+  if ((m = /\s(?:[àa]s\s+|a partir das\s+)?(\d{1,2})(?::(\d{2})|h(\d{2})?)(?:\s*(?:h|hs|horas))?(?=[\s,.;])/i.exec(t)) || (m = /\s[àa]s\s+(\d{1,2})()()(?:\s*(?:h|hs|horas))?(?=[\s,.;])/i.exec(t))) {
+    const h = Number(m[1]), mi = Number(m[2] || m[3] || 0);
+    if (h <= 23 && mi <= 59) { out.hora = String(h).padStart(2, '0') + ':' + String(mi).padStart(2, '0'); tira(m); }
+  }
+  out.texto = t.replace(/\s+/g, ' ').replace(/\s+([,.;])/g, '$1').trim().replace(/(?:[\s,;:–-]+(?:no|na|em|dia|para|pro|às|as|até))+$/i, '').replace(/[\s,;:–-]+$/, '').trim();
+  const w = semAcento(out.texto.split(' ')[0]);
+  if (/^(solicit|pedir|peca|cobrar|requisit)/.test(w)) out.tipo = 'Solicitar';
+  else if (/^(reuni|alinhament|call|encontro|visita)/.test(w)) out.tipo = 'Reunião';
+  else if (/^(enviar|entreg|mandar|apresent|encaminh|responder|devolver)/.test(w)) out.tipo = 'Entregar';
+  // com quem: o primeiro nome citado que é de uma pessoa cadastrada; se nenhum, o nome logo depois do verbo
+  const primeiro = s => semAcento(String(s).trim().split(/\s+/)[0]);
+  const re = /(?:^|\s)(?:a|à|ao|com|para|pra|de|da|do|o)\s+([A-ZÀ-Ý][A-Za-zÀ-ÿ]+(?:\s+[A-ZÀ-Ý][A-Za-zÀ-ÿ]+)?)/g;
+  let c;
+  while ((c = re.exec(out.texto))) {
+    const nomes = c[1].split(/\s+/);
+    const achada = pessoas.find(p => semAcento(p.nome) === semAcento(c[1])) || pessoas.find(p => primeiro(p.nome) === primeiro(nomes[0]));
+    if (achada) { out.contra = achada.id; out.contraNome = achada.nome; break; }
+  }
+  if (!out.contra && (c = /^\S+\s+(?:a|à|ao|com|para)\s+([A-ZÀ-Ý][A-Za-zÀ-ÿ]+)/.exec(out.texto) || /\scom\s+([A-ZÀ-Ý][A-Za-zÀ-ÿ]+)/.exec(out.texto))) out.contraNome = c[1];
+  return out;
 }

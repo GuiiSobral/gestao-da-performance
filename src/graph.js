@@ -90,6 +90,11 @@ export class GraphBackend {
     return { id: it.id, etag: it.eTag, modified: it.lastModifiedDateTime, fields: it.fields || fields };
   }
 
+  // Apaga um item (vai para a lixeira do site). Usado só para desfazer algo que o próprio app acabou de criar.
+  async remove(name, id) {
+    await this.req('DELETE', `/sites/${this.siteId}/lists/${this.listId(name)}/items/${id}`);
+  }
+
   async etagAtual(name, id) {
     return (await this.req('GET', `/sites/${this.siteId}/lists/${this.listId(name)}/items/${id}?$select=id,eTag`)).eTag;
   }
@@ -147,6 +152,11 @@ export class MemoryBackend {
     (this.db[name] = this.db[name] || []).push(it);
     this.log.push(['create', name, fields]);
     return { ...it, etag: this.tag(it), fields: { ...it.fields } };
+  }
+  async remove(name, id) {
+    this.falha();
+    this.db[name] = (this.db[name] || []).filter(x => x.id !== id);
+    this.log.push(['remove', name, id]);
   }
   async update(name, id, fields, etag) {
     this.falha();
