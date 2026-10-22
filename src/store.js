@@ -20,6 +20,15 @@ export const LISTS = {
 // Listas que o app tolera não encontrar (o resto do app segue funcionando sem elas).
 const OPCIONAIS = new Set(['GP_Compromissos']);
 export const TIPOS_COMP = ['Solicitar', 'Entregar', 'Reunião', 'Outro'];
+// Tipos de demanda que a pessoa escolhe ao criar ou editar; os outros (entrega, deliberação, desvio) nascem de outras telas.
+export const TIPOS_DEM = ['Pendência', 'Questão crítica'];
+const PREFIXO_DEM = { 'Questão crítica': 'QC', 'Pendência': 'PD', 'Entrega de frente': 'EF' };
+// O que cada tela pode editar: só texto e classificação. Prazo, responsável e status têm botões próprios (com motivo e histórico).
+const EDITAVEL = {
+  acao: { lista: 'GP_Acoes', campos: { acao: 'OQue', problema: 'Problema', causa: 'Causa', como: 'Como', area: 'Area' }, obrig: ['acao'] },
+  comp: { lista: 'GP_Compromissos', campos: { oque: 'OQue', tipo: 'Tipo', hora: 'Hora', contra: 'ContraparteCodigo' }, obrig: ['oque'] },
+  dem: { lista: 'GP_Demandas', campos: { titulo: 'Assunto', tipo: 'Tipo', area: 'Area', prioridade: 'Prioridade' }, obrig: ['titulo'] }
+};
 export const REPETICOES = ['Única', 'Semanal', 'Mensal'];
 
 // Datas: o SharePoint guarda ao meio-dia UTC para não mudar de dia no fuso de Brasília.
@@ -271,16 +280,33 @@ export class Store {
     d.encerrada = false; d.dataEnc = null; d.motivoCancel = '';
   }
 
-  async novaAcao({ cli, acao, porque, dem, resp, prazo, area, como, origem }) {
+  // Demanda nova criada pela pessoa (ao registrar ou ao mover uma ação). Código pelo tipo: QC, PD ou EF.
+  async novaDemanda({ cli, titulo, tipo, frente, resp, area, prazo, origem }) {
+    const t = PREFIXO_DEM[tipo] ? tipo : 'Pendência';
+    const tit = String(titulo || '').trim();
+    if (!tit) throw new Error('Informe o título da demanda');
+    const fr = frente ? this.frente(frente) : null;
+    if (frente && (!fr || fr.cli !== cli)) throw new Error(`a frente ${frente} não é deste cliente`);
+    const f = { ClienteCodigo: cli, Assunto: tit.slice(0, 255), Tipo: t, FrenteCodigo: fr ? fr.id : undefined, ResponsavelCodigo: resp, Area: area,
+      PrazoDemanda: toSP(prazo), Encerrada: false, Origem: origem || 'Captura rápida' };
+    const { it, code } = await this.criar('GP_Demandas', this.demandas, u => this.proximo(u, `${cli}-${PREFIXO_DEM[t]}-`, 2), c => ({ Title: c, ...f }));
+    if (fr && fr.encerrada) {
+      await this.upd('GP_Frentes', fr, { Encerrada: false, DataEncerramento: null });
+      fr.encerrada = false; fr.dataEnc = null;
+    }
+    const d = { itemId: it.id, etag: it.etag, id: code, cli, titulo: f.Assunto, tipo: t, frente: fr ? fr.id : null, prioridade: null, resp: resp || null, area: area || '',
+      prazo: prazo || null, encerrada: false, dataEnc: null, origem: f.Origem, statusOriginal: '', nota: '', motivoCancel: '' };
+    this.demandas.push(d);
+    return d;
+  }
+
+  async novaAcao({ cli, acao, porque, dem, novaDem, resp, prazo, area, como, origem }) {
     const hoje = hojeISO();
     let demanda = dem ? this.demanda(dem) : null;
+    if (dem && (!demanda || demanda.cli !== cli)) throw new Error(`a demanda ${dem} não é deste cliente`);
     if (!demanda) {
-      const f = { ClienteCodigo: cli, Assunto: acao.slice(0, 255), Tipo: 'Pendência', ResponsavelCodigo: resp, Area: area,
-        PrazoDemanda: toSP(prazo), Encerrada: false, Origem: origem };
-      const { it, code } = await this.criar('GP_Demandas', this.demandas, u => this.proximo(u, `${cli}-PD-`, 2), c => ({ Title: c, ...f }));
-      demanda = { itemId: it.id, etag: it.etag, id: code, cli, titulo: f.Assunto, tipo: 'Pendência', frente: null, prioridade: null, resp, area, prazo,
-        encerrada: false, dataEnc: null, origem, statusOriginal: '', nota: '' };
-      this.demandas.push(demanda);
+      demanda = await this.novaDemanda({ cli, titulo: (novaDem && novaDem.titulo) || acao, tipo: (novaDem && novaDem.tipo) || 'Pendência',
+        frente: novaDem && novaDem.frente, resp, area, prazo, origem });
     } else if (demanda.encerrada) {
       const fr = { Encerrada: false };
       if (demanda.motivoCancel) { fr.DataEncerramento = null; fr.MotivoCancelamento = null; }
@@ -297,6 +323,174 @@ export class Store {
       registro: hoje, linha: null, arquivo: '', statusOriginal: '', respOriginal: '', modifiedDay: hoje, reprogramacoes: [] };
     this.acoes.push(a);
     return a;
+  }
+
+  // ---------- edição de texto e classificação ----------
+  // Grava só o que mudou e devolve os valores anteriores (para o Desfazer chamar editar de novo com eles).
+  async editar(tipo, obj, novos) {
+    const cfg = EDITAVEL[tipo];
+    if (!cfg) throw new Error(`tipo ${tipo} não existe`);
+    const antes = {}, f = {};
+    for (const [k, col] of Object.entries(cfg.campos)) {
+      if (!(k in novos)) continue;
+      let v = novos[k];
+      if (k === 'prioridade') {
+        v = v === '' || v === null || v === undefined ? null : Number(v);
+        if (v !== null && !(Number.isInteger(v) && v >= 1 && v <= 7)) throw new Error('A prioridade vai de P1 a P7');
+      } else {
+        v = String(v ?? '').trim();
+        if (k !== 'como') v = v.slice(0, 255);
+      }
+      if (cfg.obrig.includes(k) && !v) throw new Error('O texto principal não pode ficar vazio');
+      const atual = k === 'prioridade' ? (obj[k] ?? null) : String(obj[k] ?? '');
+      if (v === atual) continue;
+      antes[k] = obj[k] ?? (k === 'prioridade' ? null : '');
+      f[col] = v === '' ? null : v;
+    }
+    if (tipo === 'dem' && 'Tipo' in f) {
+      if (!TIPOS_DEM.includes(obj.tipo) || !TIPOS_DEM.includes(f.Tipo)) throw new Error(`O tipo ${obj.tipo} não muda por aqui`);
+    }
+    if (tipo === 'comp' && 'Tipo' in f && !TIPOS_COMP.includes(f.Tipo)) throw new Error('Tipo de compromisso inválido');
+    if (tipo === 'acao' && 'Area' in f && f.Area && !AREAS.includes(f.Area)) throw new Error('Área inválida');
+    if (tipo === 'dem' && 'Area' in f && f.Area && !AREAS.includes(f.Area)) throw new Error('Área inválida');
+    if (!Object.keys(f).length) throw Object.assign(new Error('Nada mudou'), { nadaMudou: true });
+    await this.upd(cfg.lista, obj, f);
+    for (const k of Object.keys(antes)) obj[k] = k === 'prioridade' ? f[cfg.campos[k]] : (f[cfg.campos[k]] ?? '');
+    if (tipo === 'acao') obj.modifiedDay = hojeISO();
+    return antes;
+  }
+
+  // ---------- mover ação para outra demanda ----------
+  // Pendência que o app criou sozinho para esta ação (registro rápido sem demanda): só ela, sem frente e sem nada ligado.
+  pendenciaSoDela(d, a) {
+    if (!d || d.tipo !== 'Pendência' || d.frente || d.encerrada) return false;
+    if (!['Captura rápida', 'Compromisso'].includes(d.origem)) return false;
+    if (this.acoesDe(d.id).some(x => x !== a)) return false;
+    if (this.delib.some(x => x.demanda === d.id && x.acaoId !== a.id)) return false;
+    if (this.compromissos.some(c => c.demanda === d.id)) return false;
+    return true;
+  }
+
+  // destino: código de uma demanda aberta do mesmo cliente, ou { titulo, tipo, frente } para criar uma nova.
+  // Se a origem era a pendência criada só para esta ação, ela é cancelada com o motivo "ação movida".
+  async moverAcao(a, destino) {
+    const de = this.demanda(a.demanda);
+    const soDela = this.pendenciaSoDela(de, a);
+    let para, criada = false;
+    if (destino && typeof destino === 'object') {
+      para = await this.novaDemanda({ cli: a.cli, titulo: destino.titulo, tipo: destino.tipo, frente: destino.frente, resp: a.resp, area: a.area, prazo: a.prazo, origem: 'Captura rápida' });
+      criada = true;
+    } else {
+      para = this.demanda(destino);
+      if (!para || para.cli !== a.cli) throw new Error('Escolha uma demanda deste cliente');
+      if (para.encerrada) throw new Error(`A demanda ${para.id} está encerrada`);
+      if (para.id === a.demanda) throw Object.assign(new Error('A ação já está nesta demanda'), { nadaMudou: true });
+    }
+    try {
+      await this.upd('GP_Acoes', a, { DemandaCodigo: para.id });
+    } catch (e) {
+      if (criada) { try { await this.be.remove('GP_Demandas', para.itemId); this.demandas = this.demandas.filter(x => x !== para); } catch (x) { /* a releitura mostra */ } }
+      throw e;
+    }
+    a.demanda = para.id; a.modifiedDay = hojeISO();
+    let encerrou = false;
+    if (soDela) {
+      try { await this.cancelarDemanda(de, `Ação ${a.id} movida para ${para.id}`); encerrou = true; } catch (e) { /* a demanda fica sem plano: a pessoa decide */ }
+    }
+    return { de: de ? de.id : null, para: para.id, criada, encerrou };
+  }
+
+  // Desfaz o mover: volta a ação, reabre a pendência de origem e apaga a demanda criada no movimento (se ficou vazia).
+  async desfazerMover(a, r) {
+    const de = this.demanda(r.de), para = this.demanda(r.para);
+    if (r.encerrou && de) await this.reabrirDemanda(de);
+    await this.upd('GP_Acoes', a, { DemandaCodigo: r.de });
+    a.demanda = r.de; a.modifiedDay = hojeISO();
+    if (r.criada && para && !this.acoesDe(para.id).length) {
+      await this.be.remove('GP_Demandas', para.itemId);
+      this.demandas = this.demandas.filter(x => x !== para);
+    }
+  }
+
+  // ---------- trocar o cliente de um registro feito no cliente errado ----------
+  // Só sem história: o código carrega o cliente, então o registro é recriado no cliente certo e o antigo vai para a lixeira do site.
+  podeTrocarCliente(tipo, obj) {
+    if (tipo === 'acao') {
+      if (obj.status === 'Concluída' || obj.status === 'Cancelada') return { ok: false, motivo: `A ação já está ${obj.status.toLowerCase()}.` };
+      if (obj.reprogramacoes.length) return { ok: false, motivo: 'A ação tem histórico de prazo.' };
+      if (obj.linha || obj.origem === 'Migração') return { ok: false, motivo: 'A ação veio da migração da planilha.' };
+      if (this.delib.some(x => x.acaoId === obj.id)) return { ok: false, motivo: 'A ação nasceu de uma deliberação do fórum.' };
+      if (this.compromissos.some(c => c.demanda === obj.demanda)) return { ok: false, motivo: 'A demanda da ação está ligada a um compromisso.' };
+      return { ok: true };
+    }
+    if (tipo === 'comp') {
+      if (obj.status !== 'Pendente') return { ok: false, motivo: 'O compromisso já foi fechado.' };
+      if (obj.demanda) return { ok: false, motivo: 'O compromisso já virou pendência.' };
+      if (this.serieDe(obj).length > 1) return { ok: false, motivo: 'O compromisso já tem outras vezes na série.' };
+      return { ok: true };
+    }
+    return { ok: false, motivo: 'Este registro não troca de cliente.' };
+  }
+
+  // dem: código de uma demanda aberta do cliente novo, ou vazio para uma pendência nova com o título da demanda atual.
+  async trocarClienteAcao(a, cli, { resp, dem }) {
+    const pode = this.podeTrocarCliente('acao', a);
+    if (!pode.ok) throw new Error(pode.motivo);
+    if (!this.cliente(cli) || cli === a.cli) throw new Error('Escolha outro cliente');
+    const r = resp || a.resp;
+    if (!this.pessoasPara(cli).some(p => p.id === r)) throw new Error(`${this.nome(r) || 'O responsável'} não atende este cliente: escolha outro responsável`);
+    const de = this.demanda(a.demanda), soDela = this.pendenciaSoDela(de, a);
+    let destino = dem ? this.demanda(dem) : null, criada = null;
+    if (dem && (!destino || destino.cli !== cli || destino.encerrada)) throw new Error('Escolha uma demanda aberta do cliente novo');
+    if (!destino) {
+      criada = await this.novaDemanda({ cli, titulo: de ? de.titulo : a.acao, tipo: de && TIPOS_DEM.includes(de.tipo) ? de.tipo : 'Pendência', resp: r, area: a.area, prazo: a.prazo, origem: 'Captura rápida' });
+      destino = criada;
+    }
+    const f = { ClienteCodigo: cli, DemandaCodigo: destino.id, OQue: a.acao, Problema: a.problema, Causa: a.causa, ResponsavelCodigo: r,
+      Apoio: a.apoio, Area: a.area, Como: a.como, Quanto: a.quanto ?? undefined, Inicio: toSP(a.inicio), PrazoOriginal: toSP(a.prazoOriginal), Prazo: toSP(a.prazo),
+      Status: a.status, Origem: a.origem || 'Captura rápida', Registro: toSP(a.registro) };
+    let nova;
+    try {
+      const { it, code } = await this.criar('GP_Acoes', this.acoes, u => this.proximo(u, `${cli}-A`, 3), c => ({ Title: c, ...f }));
+      nova = { ...a, itemId: it.id, etag: it.etag, id: code, cli, demanda: destino.id, resp: r, modifiedDay: hojeISO(), reprogramacoes: [] };
+      await this.be.remove('GP_Acoes', a.itemId);
+    } catch (e) {
+      if (nova) { try { await this.be.remove('GP_Acoes', nova.itemId); } catch (x) { /* a releitura mostra */ } }
+      if (criada) { try { await this.be.remove('GP_Demandas', criada.itemId); } catch (x) { /* idem */ } this.demandas = this.demandas.filter(x => x !== criada); }
+      throw e;
+    }
+    this.acoes = this.acoes.filter(x => x !== a);
+    this.acoes.push(nova);
+    let apagouDem = false;
+    if (soDela) {
+      try { await this.be.remove('GP_Demandas', de.itemId); this.demandas = this.demandas.filter(x => x !== de); apagouDem = true; } catch (e) { /* fica sem plano */ }
+    }
+    return { nova, antigo: a.id, cliAntigo: a.cli, demAntiga: de ? de.id : null, apagouDem, demNova: destino.id };
+  }
+
+  async trocarClienteComp(c, cli, { resp }) {
+    const pode = this.podeTrocarCliente('comp', c);
+    if (!pode.ok) throw new Error(pode.motivo);
+    if (!this.cliente(cli) || cli === c.cli) throw new Error('Escolha outro cliente');
+    const r = resp || c.resp;
+    if (!this.pessoasPara(cli).some(p => p.id === r)) throw new Error(`${this.nome(r) || 'O responsável'} não atende este cliente: escolha outro responsável`);
+    // "Com quem": pessoa da Solve vale em qualquer cliente; pessoa do cliente antigo vira o nome digitado.
+    const pc = this.pessoa(c.contra);
+    const contra = pc && pc.cli && pc.cli !== cli && pc.empresa !== 'Solve' ? pc.nome : c.contra;
+    const repete = c.rec && c.rec !== 'Única';
+    const f = { ClienteCodigo: cli, OQue: c.oque, Tipo: c.tipo, ResponsavelCodigo: r, ContraparteCodigo: contra, Data: toSP(c.data), DataOriginal: toSP(c.dataOrig),
+      Hora: c.hora, Recorrencia: c.rec, Status: 'Pendente', Registro: toSP(c.registro), RegistradoPor: c.por };
+    const { it, code } = await this.criar('GP_Compromissos', this.compromissos, u => this.proximo(u, `${cli}-C`, 4), x => ({ Title: x, ...f, SerieCodigo: repete ? x : undefined }));
+    const novo = this.comp({ id: it.id, etag: it.etag, fields: { ...f, Title: code, SerieCodigo: repete ? code : null } });
+    try {
+      await this.be.remove('GP_Compromissos', c.itemId);
+    } catch (e) {
+      try { await this.be.remove('GP_Compromissos', it.id); } catch (x) { /* a releitura mostra */ }
+      throw e;
+    }
+    this.compromissos = this.compromissos.filter(x => x !== c);
+    this.compromissos.push(novo);
+    return { novo, antigo: c.id, cliAntigo: c.cli, respAntigo: c.resp };
   }
 
   // Entrega de uma frente: é a demanda onde as ações da frente ficam penduradas.

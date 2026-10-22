@@ -1,5 +1,5 @@
 // Interface da Gestão da Performance (mesmas telas do protótipo aprovado), lendo e gravando nas Listas do SharePoint.
-import { AREAS, hojeISO, lerLinha, TIPOS_COMP, REPETICOES } from './store.js';
+import { AREAS, hojeISO, lerLinha, TIPOS_COMP, TIPOS_DEM, REPETICOES } from './store.js';
 import { aplicarTema, temaHtml } from './theme.js';
 
 let st = null;          // Store
@@ -434,7 +434,7 @@ function demRow(d, i, comCli) {
       <div class="small muted"><span class="mono">${esc(d.id)}</span>${d.origem ? ' · origem: ' + esc(d.origem) : ''}${d.prazo ? ` · prazo da demanda: ${fmt(d.prazo)}` : ''}${d.encerrada && d.dataEnc ? ` · ${d.motivoCancel ? 'cancelada' : 'encerrada'} em ${fmtF(d.dataEnc)}` : ''}</div>
       ${d.encerrada && d.motivoCancel ? `<div class="small"><b>Motivo do cancelamento:</b> ${esc(d.motivoCancel)}</div>` : ''}
       ${i.ac.length ? `<div style="overflow-x:auto"><table class="mini"><tbody>${sortAcoes(i.ac).map(a => `<tr data-acao="${esc(a.id)}"><td class="c-id">${esc(a.id)}</td><td><button class="linkbtn plain" data-acao="${esc(a.id)}">${esc(a.acao)}</button></td><td class="c-nw">${esc(st.nome(a.resp) || '—')}</td><td class="c-nw">${pill(situacao(a))}</td></tr>`).join('')}</tbody></table></div>` : ''}
-      <div class="row-actions">${i.aberta ? `<button class="btn sm" data-do="capturar" data-dem-pre="${esc(d.id)}">+ ${i.ac.length ? 'Nova ação nesta demanda' : 'Criar a primeira ação'}</button><button class="btn sm" data-do="respDem" data-id="${esc(d.id)}">Trocar responsável</button>` : ''}
+      <div class="row-actions">${i.aberta ? `<button class="btn sm" data-do="capturar" data-dem-pre="${esc(d.id)}">+ ${i.ac.length ? 'Nova ação nesta demanda' : 'Criar a primeira ação'}</button><button class="btn sm" data-do="respDem" data-id="${esc(d.id)}">Trocar responsável</button>` : ''}<button class="btn sm ghost" data-do="editDem" data-id="${esc(d.id)}">Editar</button>
         ${i.validar ? `<button class="btn sm primary" data-do="encerrarDem" data-id="${esc(d.id)}">Confirmar encerramento</button>` : ''}
         ${i.status === 'Sem plano de ação' ? `<button class="btn sm danger ghost" data-do="cancDem" data-id="${esc(d.id)}">Cancelar demanda</button>` : ''}</div>
     </div>` : ''}
@@ -815,6 +815,14 @@ function compDrawerHtml() {
       <div class="field"><label for="rcHora">Hora (opcional)</label><input type="time" id="rcHora" value="${esc(c.hora)}"></div>
       <div class="full small muted">Remarcar não pede motivo. A data original continua valendo para medir o cumprimento${c.rec !== 'Única' ? ' e para a próxima repetição' : ''}.</div>
       <div class="full row-actions"><button class="btn primary" type="submit">Salvar nova data</button><button class="btn" type="button" data-do="modo" data-m="">Voltar</button><span class="small err-text" id="rcErr" role="alert"></span></div></form>`;
+  if (modo === 'editar') form = `<form id="fEdC" class="form boxed">
+      <div class="field full"><label for="eOque">O quê</label><input id="eOque" required maxlength="255" value="${esc(c.oque)}"></div>
+      <div class="field"><label for="eTipo">Tipo</label><select id="eTipo">${TIPOS_COMP.map(t => `<option${t === c.tipo ? ' selected' : ''}>${t}</option>`).join('')}</select></div>
+      <div class="field"><label for="eHora">Hora (opcional)</label><input type="time" id="eHora" value="${esc(c.hora)}"></div>
+      <div class="field full"><label for="eContra">Com quem</label><input id="eContra" list="eContraL" maxlength="255" autocomplete="off" value="${esc(contraNome(c))}"><datalist id="eContraL">${st.contrapartes(c.cli).map(p => `<option value="${esc(p.nome)}">`).join('')}</datalist></div>
+      <div class="full small muted">A data muda em Remarcar, e quem cumpre em Trocar. ${c.rec !== 'Única' ? 'As próximas vezes da série nascem com o texto novo.' : ''}</div>
+      <div class="full row-actions"><button class="btn primary" type="submit">Salvar edição</button><button class="btn" type="button" data-do="modo" data-m="">Voltar</button><span class="small err-text" id="eErr" role="alert"></span></div></form>`;
+  if (modo === 'cliente') form = trocaCliHtml('comp', c);
   if (modo === 'resp') form = `<form id="fRespC" class="form boxed">
       <div class="field full"><label for="tResp">Quem cumpre</label><select id="tResp" required><option value="">Escolha</option>${optPessoas(c.cli, c.resp)}</select></div>
       <div class="full small muted">${c.rec !== 'Única' ? 'Vale para esta vez e para as próximas da série, que são criadas a partir desta. ' : ''}A data e o cumprimento não mudam.</div>
@@ -829,6 +837,7 @@ function compDrawerHtml() {
         <dt>QUEM</dt><dd>${respHtml(c.resp)}${aberto && !modo ? ' <button class="btn sm ghost" data-do="modo" data-m="resp">Trocar</button>' : ''}</dd>
         <dt>REPETE</dt><dd>${c.rec === 'Única' ? 'Não' : c.rec + (aberto ? ` · a próxima é criada ao fechar esta (${fmt(st.proximaDe(c))})` : '')}</dd>
       </dl>
+      ${!modo ? `<div class="row-actions"><button class="btn sm" data-do="modo" data-m="editar">Editar</button>${aberto ? `<button class="btn sm ghost" data-do="modo" data-m="cliente">Trocar cliente</button>` : ''}</div>` : ''}
       ${c.demanda ? `<div class="panel" style="padding:12px;background:var(--surface-2)"><div class="label">Virou pendência</div><button class="linkbtn" data-dem-go="${esc(c.demanda)}" data-cli-set="${esc(c.cli)}" style="margin-top:4px">${esc(st.demanda(c.demanda) ? st.demanda(c.demanda).titulo : c.demanda)}</button></div>` : ''}
       <form id="fRes" class="form"><div class="field full"><label for="cRes">Resultado${aberto ? ' (opcional, gravado ao fechar)' : ''}</label><textarea id="cRes" maxlength="2000" placeholder="Ex.: Layra enviou só o PIS; COFINS fica para segunda">${esc(c.resultado)}</textarea></div>
         ${aberto ? '' : '<div class="full row-actions"><button class="btn sm" type="submit">Salvar resultado</button></div>'}</form>
@@ -859,6 +868,24 @@ function drawerHtml() {
       <div class="field"><label for="tApoio">Apoio (opcional)</label><input id="tApoio" maxlength="255" value="${esc(a.apoio)}" placeholder="Nomes, separados por vírgula"></div>
       <div class="full small muted">Prazo e histórico de prazo continuam os mesmos. O histórico de versões da lista guarda quem trocou e quando.</div>
       <div class="full row-actions"><button class="btn primary" type="submit">Salvar responsável</button><button class="btn" type="button" data-do="modo" data-m="">Voltar</button><span class="small err-text" id="tErr" role="alert"></span></div></form>`;
+  if (modo === 'editar') form = `<form id="fEdA" class="form boxed">
+      <div class="field full"><label for="eOque">O quê (ação)</label><input id="eOque" required maxlength="255" value="${esc(a.acao)}"></div>
+      <div class="field full"><label for="ePq">Por quê (problema)</label><input id="ePq" maxlength="255" value="${esc(a.problema)}"></div>
+      <div class="field full"><label for="eCausa">Causa (opcional)</label><input id="eCausa" maxlength="255" value="${esc(a.causa)}"></div>
+      <div class="field"><label for="eArea">Onde (área)</label><select id="eArea"><option value="">—</option>${optAreas(a.area)}</select></div>
+      <div class="field full"><label for="eComo">Como</label><textarea id="eComo" maxlength="2000">${esc(a.como)}</textarea></div>
+      <div class="full small muted">Prazo, responsável e status têm botões próprios, para o novo prazo continuar pedindo motivo. O histórico de versões da lista guarda o texto anterior.</div>
+      <div class="full row-actions"><button class="btn primary" type="submit">Salvar edição</button><button class="btn" type="button" data-do="modo" data-m="">Voltar</button><span class="small err-text" id="eErr" role="alert"></span></div></form>`;
+  if (modo === 'mover') {
+    const outras = demandasC(a.cli).filter(x => !x.encerrada && x.id !== a.demanda).sort((x, y) => (x.tipo === 'Questão crítica' ? 0 : 1) - (y.tipo === 'Questão crítica' ? 0 : 1) || x.titulo.localeCompare(y.titulo));
+    const soDela = st.pendenciaSoDela(d, a);
+    form = `<form id="fMov" class="form boxed">
+      <div class="field full"><label for="mvDem">Mover para</label><select id="mvDem">${outras.length ? '<option value="">Escolha a demanda</option>' : ''}<option value="__nova__"${outras.length ? '' : ' selected'}>+ Nova demanda</option>${outras.map(x => `<option value="${esc(x.id)}">${esc(x.tipo === 'Questão crítica' ? 'QC · ' : x.tipo === 'Entrega de frente' ? 'Entrega · ' : '')}${esc(x.titulo)}</option>`).join('')}</select></div>
+      ${novaDemHtml('mv', a.cli, a.acao, !outras.length)}
+      <div class="full small muted">${soDela ? `A pendência atual (${esc(d.id)}) foi criada só para esta ação: ela será cancelada com o motivo “ação movida”.` : 'A demanda atual continua; se ficar sem ações, aparece como Sem plano de ação.'} Prazo, responsável e histórico da ação não mudam.</div>
+      <div class="full row-actions"><button class="btn primary" type="submit">Mover ação</button><button class="btn" type="button" data-do="modo" data-m="">Voltar</button><span class="small err-text" id="mvErr" role="alert"></span></div></form>`;
+  }
+  if (modo === 'cliente') form = trocaCliHtml('acao', a);
   if (modo === 'cancel') form = `<form id="fCan" class="form boxed">
       <div class="field full"><label for="cMot">Por que cancelar?</label><input type="text" id="cMot" required placeholder="Ex.: substituída por outra ação"></div>
       <div class="full row-actions"><button class="btn danger" type="submit">Cancelar ação</button><button class="btn" type="button" data-do="modo" data-m="">Voltar</button><span class="small err-text" id="cErr" role="alert"></span></div></form>`;
@@ -874,7 +901,8 @@ function drawerHtml() {
         <dt>COMO</dt><dd>${a.como ? esc(a.como) : '<span class="muted">Sem observação</span>'}</dd>
         <dt>QUANTO</dt><dd>${a.quanto !== null && a.quanto !== undefined ? 'R$ ' + Number(a.quanto).toLocaleString('pt-BR', { minimumFractionDigits: 2 }) : '<span class="muted">Não registrado</span>'}</dd>
       </dl>
-      <div class="panel" style="padding:12px;background:var(--surface-2)"><div class="label">Demanda</div><button class="linkbtn" data-dem-go="${esc(d ? d.id : '')}" style="margin-top:4px">${esc(d ? d.titulo : a.demanda)}</button><div class="small muted">${esc(d ? d.tipo : '')}${fr ? ` · frente ${esc(fr.nome)}` : ''}</div></div>
+      ${!modo ? `<div class="row-actions"><button class="btn sm" data-do="modo" data-m="editar">Editar</button>${aberta(a) ? '<button class="btn sm ghost" data-do="modo" data-m="cliente">Trocar cliente</button>' : ''}</div>` : ''}
+      <div class="panel" style="padding:12px;background:var(--surface-2)"><div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><div class="label">Demanda</div>${!modo ? '<button class="btn sm ghost" data-do="modo" data-m="mover">Mover</button>' : ''}</div><button class="linkbtn" data-dem-go="${esc(d ? d.id : '')}" style="margin-top:4px">${esc(d ? d.titulo : a.demanda)}</button><div class="small muted">${esc(d ? d.tipo : '')}${fr ? ` · frente ${esc(fr.nome)}` : ''}</div></div>
       ${hist ? `<div><div class="label" style="margin-bottom:6px">Histórico de prazo</div><div class="hist">${hist}</div></div>` : ''}
       ${a.motivoCancel ? `<div class="note">Cancelada: ${esc(a.motivoCancel)}</div>` : ''}
       <div class="small muted">Origem: ${a.linha ? `linha ${a.linha} de ${esc(a.arquivo || 'arquivo de origem')}` : esc(a.origem || '—')} · registrada em ${fmtF(a.registro)}${a.statusOriginal ? ` · status no arquivo: “${esc(a.statusOriginal)}”` : ''}${a.respOriginal && a.respOriginal !== st.nome(a.resp) ? ` · responsável no arquivo: “${esc(a.respOriginal)}”` : ''}</div>
@@ -885,6 +913,49 @@ function drawerHtml() {
 }
 const optPessoas = (cli, sel) => st.pessoasPara(cli).map(p => `<option value="${esc(p.id)}"${p.id === sel ? ' selected' : ''}>${esc(p.nome)}${p.empresa === 'Solve' ? ' (Solve)' : ''}</option>`).join('');
 const optAreas = sel => AREAS.map(a => `<option${a === sel ? ' selected' : ''}>${esc(a)}</option>`).join('');
+// Campos de "+ Nova demanda" (no registro de ação e no mover). Ficam escondidos até a pessoa escolher a opção.
+function novaDemHtml(px, cli, titulo, aberto) {
+  const frs = st.frentes.filter(f => f.cli === cli && !f.encerrada).sort((a, b) => a.nome.localeCompare(b.nome));
+  return `<div class="full nova-dem" id="${px}Nova"${aberto ? '' : ' hidden'}>
+      <div class="field full"><label for="${px}Tit">Título da nova demanda</label><input id="${px}Tit" maxlength="255" value="${esc(titulo || '')}" placeholder="Em branco, leva o texto da ação"></div>
+      <div class="field"><label for="${px}Tipo">Tipo</label><select id="${px}Tipo">${TIPOS_DEM.map(t => `<option>${t}</option>`).join('')}</select></div>
+      <div class="field"><label for="${px}Fr">Frente (opcional)</label><select id="${px}Fr"><option value="">Nenhuma</option>${frs.map(f => `<option value="${esc(f.id)}">${esc(f.nome)}</option>`).join('')}</select></div>
+    </div>`;
+}
+// Troca de cliente de ação ou compromisso. Só para registro sem história; o motivo aparece quando não pode.
+function trocaCliHtml(tipo, obj) {
+  const pode = st.podeTrocarCliente(tipo, obj);
+  if (!pode.ok) return `<div class="boxed form"><div class="full note">Não dá para trocar o cliente: ${esc(pode.motivo)} O código carrega o cliente e o histórico ficaria ligado ao cliente errado. Se foi registrado no cliente errado, cancele e registre de novo no cliente certo.</div>
+      <div class="full row-actions"><button class="btn" type="button" data-do="modo" data-m="">Voltar</button></div></div>`;
+  const lista = (tipo === 'comp' ? clientesComp() : clientesOrd()).filter(c => c.id !== obj.cli && c.situacao !== 'Encerrado');
+  const dest = S.drawer.tcCli && lista.some(c => c.id === S.drawer.tcCli) ? S.drawer.tcCli : '';
+  const respOk = dest && st.pessoasPara(dest).some(p => p.id === obj.resp) ? obj.resp : '';
+  const demAtual = tipo === 'acao' ? st.demanda(obj.demanda) : null;
+  const dems = dest && tipo === 'acao' ? demandasC(dest).filter(x => !x.encerrada).sort((x, y) => x.titulo.localeCompare(y.titulo)) : [];
+  return `<form id="fTroca" class="form boxed" data-tipo="${tipo}">
+      <div class="field full"><label for="tcCli">Cliente certo</label><select id="tcCli" required><option value="">Escolha</option>${lista.map(c => `<option value="${esc(c.id)}"${c.id === dest ? ' selected' : ''}>${esc(c.nome)}</option>`).join('')}</select></div>
+      ${dest ? `<div class="field${tipo === 'acao' ? '' : ' full'}"><label for="tcResp">${tipo === 'comp' ? 'Quem cumpre' : 'Responsável'}</label><select id="tcResp" required><option value="">Escolha</option>${optPessoas(dest, respOk)}</select></div>
+      ${tipo === 'acao' ? `<div class="field"><label for="tcDem">Demanda no cliente certo</label><select id="tcDem"><option value="">Nova: ${esc((demAtual ? demAtual.titulo : obj.acao).slice(0, 60))}</option>${dems.map(x => `<option value="${esc(x.id)}">${esc(x.titulo)}</option>`).join('')}</select></div>` : ''}` : ''}
+      <div class="full small muted">O registro é recriado em ${dest ? esc(cliNome(dest)) : 'outro cliente'} com código novo, com o mesmo texto, prazo e status. O ${esc(obj.id)} vai para a lixeira do site${tipo === 'acao' && st.pendenciaSoDela(demAtual, obj) ? `, junto com a pendência ${esc(demAtual.id)}, criada só para ele` : ''}.</div>
+      <div class="full row-actions"><button class="btn primary" type="submit"${dest ? '' : ' disabled'}>Trocar cliente</button><button class="btn" type="button" data-do="modo" data-m="">Voltar</button><span class="small err-text" id="tcErr" role="alert"></span></div></form>`;
+}
+function editDemModalHtml() {
+  const d = st.demanda(S.modal.dem);
+  if (!d) return '';
+  const tipoLivre = TIPOS_DEM.includes(d.tipo);
+  return `<div class="modal" role="dialog" aria-modal="true" aria-labelledby="mT">
+    ${cabModal('Editar demanda')}
+    <p class="small muted" style="margin:0"><span class="mono">${esc(d.id)}</span> · ${esc(cliNome(d.cli))}</p>
+    <form id="fEdD" class="form">
+      <div class="field full"><label for="eTit">Título</label><input id="eTit" required maxlength="255" value="${esc(d.titulo)}"></div>
+      <div class="field"><label for="eTipo">Tipo</label>${tipoLivre ? `<select id="eTipo">${TIPOS_DEM.map(t => `<option${t === d.tipo ? ' selected' : ''}>${t}</option>`).join('')}</select>` : `<input id="eTipo" value="${esc(d.tipo)}" disabled>`}</div>
+      <div class="field"><label for="ePrio">Prioridade</label><select id="ePrio"><option value="">Sem prioridade</option>${[1, 2, 3, 4, 5, 6, 7].map(n => `<option value="${n}"${n === d.prioridade ? ' selected' : ''}>P${n}</option>`).join('')}</select></div>
+      <div class="field full"><label for="eArea">Área</label><select id="eArea"><option value="">—</option>${optAreas(d.area)}</select></div>
+      <div class="full row-actions"><button class="btn primary" type="submit">Salvar edição</button><button class="btn" type="button" data-do="fechar">Voltar</button><span class="small err-text" id="eErr" role="alert"></span></div>
+    </form>
+    <p class="small muted" style="margin:0">${tipoLivre ? 'O código não muda ao trocar o tipo. ' : 'Entregas de frente, deliberações e desvios mantêm o tipo. '}Responsável muda em Trocar responsável; o status vem das ações.</p>
+  </div>`;
+}
 const cabModal = t => `<div style="display:flex;justify-content:space-between;align-items:center;gap:10px"><h2 id="mT" tabindex="-1">${t}</h2><button class="btn sm ghost xbtn" data-do="fechar" aria-label="Fechar">✕</button></div>`;
 function frenteModalHtml() {
   const cli = S.modal.cli || S.cli;
@@ -978,6 +1049,7 @@ function cancDemModalHtml() {
 function modalHtml() {
   if (S.modal.kind === 'respDem') return respDemModalHtml();
   if (S.modal.kind === 'cancDem') return cancDemModalHtml();
+  if (S.modal.kind === 'editDem') return editDemModalHtml();
   if (S.modal.kind === 'comp') return compModalHtml();
   if (S.modal.kind === 'frente') return frenteModalHtml();
   if (S.modal.kind === 'entrega') return entregaModalHtml();
@@ -993,7 +1065,8 @@ function modalHtml() {
       <div class="field full"><label for="mCli">Cliente</label><select id="mCli">${clientesOrd().map(c => `<option value="${esc(c.id)}"${c.id === cli ? ' selected' : ''}>${esc(c.nome)}</option>`).join('')}</select></div>
       <div class="field full"><label for="mAcao">O quê (ação)</label><input id="mAcao" required maxlength="255" value="${esc(pf.acao || '')}" placeholder="Verbo no infinitivo + objeto. Ex.: Enviar a posição do estoque de outubro"></div>
       <div class="field full"><label for="mPq">Por quê (problema ou causa)</label><input id="mPq" maxlength="255" value="${esc(pf.porque || '')}"></div>
-      <div class="field full"><label for="mDem">Demanda</label><select id="mDem"><option value="">Nova pendência com o mesmo título</option>${dems.map(d => `<option value="${esc(d.id)}"${d.id === pre ? ' selected' : ''}>${esc(d.titulo)}</option>`).join('')}</select></div>
+      <div class="field full"><label for="mDem">Demanda</label><select id="mDem"><option value="">Nova pendência com o mesmo título</option>${S.modal.comp ? '' : '<option value="__nova__">+ Nova demanda (escolher título, tipo e frente)</option>'}${dems.map(d => `<option value="${esc(d.id)}"${d.id === pre ? ' selected' : ''}>${esc(d.titulo)}</option>`).join('')}</select></div>
+      ${S.modal.comp ? '' : novaDemHtml('mNd', cli, '', false)}
       <div class="field"><label for="mResp">Quem</label><select id="mResp" required><option value="">Escolha</option>${pes.map(p => `<option value="${esc(p.id)}"${p.id === pf.resp ? ' selected' : ''}>${esc(p.nome)}${p.empresa === 'Solve' ? ' (Solve)' : ''}</option>`).join('')}</select></div>
       <div class="field"><label for="mPrazo">Prazo</label><input type="date" id="mPrazo" required min="${HOJE}"></div>
       <div class="field"><label for="mArea">Onde (área)</label><select id="mArea" required><option value="">Escolha</option>${AREAS.map(a => `<option${a === areaPre ? ' selected' : ''}>${esc(a)}</option>`).join('')}</select></div>
@@ -1103,7 +1176,8 @@ function onClick(e) {
   if (ds.go) { if (ds.fd) S.fd = { tipo: 'todas', st: ds.fd }; go(ds.go); return; }
   switch (ds.do) {
     case 'fechar': fechar(); break;
-    case 'modo': S.drawer.modo = ds.m || null; renderLayer(); { const i = $(ds.m === 'cancel' ? '#cMot' : ds.m === 'remarcar' ? '#rcData' : ds.m === 'resp' ? '#tResp' : ds.m ? '#rPrazo' : '#dwT'); if (i) i.focus(); } break;
+    case 'modo': S.drawer.modo = ds.m || null; S.drawer.tcCli = ''; renderLayer(); { const alvo = { cancel: '#cMot', remarcar: '#rcData', resp: '#tResp', reprog: '#rPrazo', editar: '#eOque', mover: '#mvDem', cliente: '#tcCli' }[ds.m] || '#dwT'; const i = $(alvo) || $('#layer .boxed button'); if (i) i.focus(); } break;
+    case 'editDem': S.drawer = null; S.modal = { kind: 'editDem', dem: ds.id }; renderLayer(); { const i = $('#eTit'); if (i) i.focus(); } break;
     case 'respDem': S.drawer = null; S.modal = { kind: 'respDem', dem: ds.id }; renderLayer(); { const i = $('#tResp'); if (i) i.focus(); } break;
     case 'cancDem': S.drawer = null; S.modal = { kind: 'cancDem', dem: ds.id }; renderLayer(); { const i = $('#cdMot'); if (i) i.focus(); } break;
     case 'novoComp': {
@@ -1171,6 +1245,59 @@ function onSubmit(e) {
       `${obj.id}: responsável agora é ${st.nome(resp)}`,
       ant => grava(() => st.trocarResponsavel(tipo, obj, ant.resp, tipo === 'acao' ? ant.apoio : undefined), `${obj.id} voltou para ${ant.resp ? st.nome(ant.resp) : 'sem dono'}`));
   }
+  if (f.id === 'fEdA' || f.id === 'fEdC' || f.id === 'fEdD') {
+    const tipo = f.id === 'fEdA' ? 'acao' : f.id === 'fEdC' ? 'comp' : 'dem';
+    const obj = tipo === 'acao' ? st.acao(S.drawer.id) : tipo === 'comp' ? st.compromisso(S.drawer.comp) : st.demanda(S.modal.dem);
+    if (!obj) return;
+    let novos;
+    if (tipo === 'acao') novos = { acao: $('#eOque').value, problema: $('#ePq').value, causa: $('#eCausa').value, area: $('#eArea').value, como: $('#eComo').value };
+    else if (tipo === 'comp') {
+      const nomeC = $('#eContra').value.trim(), pc = nomeC && st.contrapartes(obj.cli).find(p => p.nome.toLowerCase() === nomeC.toLowerCase());
+      novos = { oque: $('#eOque').value, tipo: $('#eTipo').value, hora: $('#eHora').value, contra: pc ? pc.id : nomeC };
+      if (pc && obj.contra === pc.id) novos.contra = obj.contra;
+      else if (!pc && nomeC === contraNome(obj)) novos.contra = obj.contra;
+    } else {
+      novos = { titulo: $('#eTit').value, prioridade: $('#ePrio').value, area: $('#eArea').value };
+      if (!$('#eTipo').disabled) novos.tipo = $('#eTipo').value;
+    }
+    const principal = { acao: 'acao', comp: 'oque', dem: 'titulo' }[tipo];
+    if (!String(novos[principal]).trim()) { $('#eErr').textContent = 'O texto principal não pode ficar vazio.'; return; }
+    const igual = Object.entries(novos).every(([k, v]) => k === 'prioridade' ? String(obj[k] ?? '') === String(v) : String(obj[k] ?? '') === String(v).trim());
+    if (igual) { $('#eErr').textContent = 'Nada mudou.'; return; }
+    const volta = () => { if (tipo === 'acao') S.drawer = { id: obj.id, modo: null }; else if (tipo === 'comp') S.drawer = { comp: obj.id, modo: null }; else S.modal = null; };
+    grava(async () => { const ant = await st.editar(tipo, obj, novos); volta(); return ant; }, `${obj.id} editada`,
+      ant => grava(() => st.editar(tipo, obj, ant), `Edição de ${obj.id} desfeita`));
+  }
+  if (f.id === 'fMov') {
+    const a = st.acao(S.drawer.id), v = $('#mvDem').value;
+    if (!a) return;
+    if (!v) { $('#mvErr').textContent = 'Escolha para qual demanda mover.'; return; }
+    const destino = v === '__nova__' ? { titulo: $('#mvTit').value.trim() || a.acao, tipo: $('#mvTipo').value, frente: $('#mvFr').value } : v;
+    grava(async () => { const r = await st.moverAcao(a, destino); S.drawer = { id: a.id, modo: null }; return r; },
+      r => `${a.id} movida para ${r.para}${r.encerrou ? ` · a pendência ${r.de} foi cancelada` : ''}`,
+      r => grava(() => st.desfazerMover(a, r), `${a.id} voltou para ${r.de}`));
+  }
+  if (f.id === 'fTroca') {
+    const tipo = f.dataset.tipo, cli = $('#tcCli').value, resp = $('#tcResp') ? $('#tcResp').value : '';
+    const obj = tipo === 'acao' ? st.acao(S.drawer.id) : st.compromisso(S.drawer.comp);
+    if (!obj) return;
+    if (!cli) { $('#tcErr').textContent = 'Escolha o cliente certo.'; return; }
+    if (!resp) { $('#tcErr').textContent = 'Escolha quem fica responsável no cliente certo.'; return; }
+    if (tipo === 'acao') {
+      const respAnt = obj.resp, dem = $('#tcDem') ? $('#tcDem').value : '';
+      grava(async () => { const r = await st.trocarClienteAcao(obj, cli, { resp, dem }); escolherCliente(cli); S.drawer = { id: r.nova.id, modo: null }; return r; },
+        r => `${r.antigo} agora é ${r.nova.id}, em ${cliNome(cli)}`,
+        r => grava(async () => {
+          const v = await st.trocarClienteAcao(r.nova, r.cliAntigo, { resp: respAnt, dem: r.demAntiga && !r.apagouDem && st.demanda(r.demAntiga) && !st.demanda(r.demAntiga).encerrada ? r.demAntiga : '' });
+          escolherCliente(r.cliAntigo); S.drawer = null; return v;
+        }, v => `Voltou para ${cliNome(r.cliAntigo)} como ${v.nova.id}`));
+    } else {
+      grava(async () => { const r = await st.trocarClienteComp(obj, cli, { resp }); S.drawer = { comp: r.novo.id, modo: null }; return r; },
+        r => `${r.antigo} agora é ${r.novo.id}, em ${cliNome(cli)}`,
+        r => grava(async () => { const v = await st.trocarClienteComp(r.novo, r.cliAntigo, { resp: r.respAntigo }); S.drawer = null; return v; },
+          v => `Voltou para ${cliNome(r.cliAntigo)} como ${v.novo.id}`));
+    }
+  }
   if (f.id === 'fCanD') {
     const d = st.demanda(S.modal.dem), m = $('#cdMot').value.trim();
     if (!d) return;
@@ -1190,7 +1317,10 @@ function onSubmit(e) {
     if (!st.nominal(resp)) { $('#mErr').textContent = 'Escolha uma pessoa, não uma empresa ou setor.'; return; }
     const comp = S.modal.comp ? st.compromisso(S.modal.comp) : null;
     grava(async () => {
-      const a = await st.novaAcao({ cli, acao, porque: $('#mPq').value.trim(), dem: $('#mDem').value, resp, prazo, area: $('#mArea').value, como: $('#mComo').value.trim(), origem: comp ? 'Compromisso' : 'Captura rápida' });
+      const dv = $('#mDem').value, nova = dv === '__nova__';
+      const a = await st.novaAcao({ cli, acao, porque: $('#mPq').value.trim(), dem: nova ? '' : dv,
+        novaDem: nova ? { titulo: $('#mNdTit').value.trim() || acao, tipo: $('#mNdTipo').value, frente: $('#mNdFr').value } : null,
+        resp, prazo, area: $('#mArea').value, como: $('#mComo').value.trim(), origem: comp ? 'Compromisso' : 'Captura rápida' });
       if (comp) await st.ligarDemanda(comp, a.demanda);
       S.modal = null; S.cli = cli; return a;
     }, a => comp ? `Pendência ${a.demanda} criada com a ação ${a.id}` : `Ação ${a.id} registrada`);
@@ -1291,7 +1421,12 @@ function onChange(e) {
     S.modal = { kind: 'frente', cli: e.target.value }; renderLayer();
     keep.forEach(([k, v]) => { $('#' + k).value = v; });
   }
-  if (id === 'mDem') { const d = st.demanda(e.target.value), ar = $('#mArea'); if (d && d.area && ar && !ar.value) ar.value = d.area; }
+  if (id === 'mDem') {
+    const d = st.demanda(e.target.value), ar = $('#mArea'); if (d && d.area && ar && !ar.value) ar.value = d.area;
+    const box = $('#mNdNova'); if (box) { box.hidden = e.target.value !== '__nova__'; if (!box.hidden) { const t = $('#mNdTit'); if (t && !t.value) t.value = $('#mAcao').value; } }
+  }
+  if (id === 'mvDem') { const box = $('#mvNova'); if (box) box.hidden = e.target.value !== '__nova__'; }
+  if (id === 'tcCli') { S.drawer.tcCli = e.target.value; renderLayer(); const el = $('#tcResp') || $('#tcCli'); if (el) el.focus(); }
   if (id === 'dGera') { const o = $('#dDemNone'); if (o) o.textContent = e.target.checked ? 'Nenhuma (a ação gerada cria uma pendência nova)' : 'Nenhuma'; }
 }
 
