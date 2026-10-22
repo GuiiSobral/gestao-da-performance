@@ -228,6 +228,23 @@ export class Store {
     a.status = 'Cancelada'; a.motivoCancel = motivo; a.modifiedDay = hojeISO();
   }
 
+  // Troca o responsável de uma ação, compromisso ou demanda aberta (na ação, também o apoio).
+  // Não pede motivo: o prazo não muda e o histórico de versões da lista guarda quem trocou e quando.
+  // Devolve o que havia antes, para o Desfazer.
+  async trocarResponsavel(tipo, obj, resp, apoio) {
+    const lista = { acao: 'GP_Acoes', comp: 'GP_Compromissos', dem: 'GP_Demandas' }[tipo];
+    if (!lista) throw new Error(`tipo ${tipo} não existe`);
+    const ant = { resp: obj.resp || null, apoio: obj.apoio || '' };
+    const f = { ResponsavelCodigo: resp || null };
+    const comApoio = tipo === 'acao' && apoio !== undefined;
+    if (comApoio) f.Apoio = apoio || null;
+    await this.upd(lista, obj, f);
+    obj.resp = resp || null;
+    if (comApoio) obj.apoio = apoio || '';
+    if (tipo === 'acao') obj.modifiedDay = hojeISO();
+    return ant;
+  }
+
   async encerrarDemanda(d) {
     const hoje = hojeISO();
     await this.upd('GP_Demandas', d, { Encerrada: true, DataEncerramento: toSP(hoje) });

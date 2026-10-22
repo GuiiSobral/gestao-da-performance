@@ -18,6 +18,7 @@ Endereço: https://guiisobral.github.io/gestao-da-performance/
 - Cancelamento exige motivo.
 - Situação da ação, farol, status da demanda e avanço da frente são calculados, nunca digitados.
 - Demanda com todas as ações fechadas fica em "Validar encerramento" até alguém confirmar.
+- Responsável de ação, compromisso ou demanda aberta pode ser trocado (**Trocar** na ação e no compromisso, **Trocar responsável** na demanda). Não pede motivo: o prazo não muda e o histórico de versões da lista guarda quem trocou. Tem **Desfazer** por 6 segundos. No compromisso que se repete, a próxima vez já nasce com o novo responsável.
 
 ## Compromissos (`GP_Compromissos`)
 
@@ -35,6 +36,7 @@ Compromissos pontuais e de rotina: um passo só, com data marcada (ex.: solicita
 
 - Tema claro, escuro ou automático (segue o sistema), escolhido no rodapé do menu ou em **Conta** no celular; fica salvo no navegador.
 - Filtros e telas ficam no endereço (ex.: `#acoes?cli=MOE&sit=vencidas`): o Voltar funciona e o link pode ser enviado.
+- Ações e Demandas têm o filtro de cliente na barra de filtros, com **Todos os clientes** (`#acoes?cli=todos`): junta os clientes da carteira, fora o interno e os encerrados. Minha semana e Compromissos também filtram por cliente. Nas listas que misturam clientes, clicar no código do cliente (ex.: MOE) filtra a tela por ele.
 - Concluir uma ação ou encerrar uma demanda mostra **Desfazer** por 6 segundos.
 - O rascunho da ata fica guardado na aba até ser salvo no SharePoint.
 

@@ -10,7 +10,8 @@ let LIM7 = null;          // definido a cada render (HOJE + 7 dias)
 const S = {
   cli: null, fa: { q: '', sit: 'abertas', resp: '', area: '', tipo: '' }, fd: { tipo: 'todas', st: 'abertas' },
   demOpen: new Set(), step: 0, pessoaSemana: null, drawer: null, modal: null, busy: false, reloading: false,
-  opener: null, ataDirty: false, fc: { p: '', cli: '', ver: 'pendentes' }
+  opener: null, ataDirty: false, fc: { p: '', cli: '', ver: 'pendentes' },
+  todos: false, semCli: ''   // todos: Ações e Demandas de todos os clientes; semCli: cliente filtrado em Minha semana
 };
 
 /* ---------- utilidades ---------- */
@@ -33,6 +34,14 @@ const frentesC = cli => st.frentes.filter(f => f.cli === cli);
 const clientesOrd = () => st.clientes.filter(c => !c.interno).sort((a, b) => st.temDados(b.id) - st.temDados(a.id) || a.nome.localeCompare(b.nome));
 // Compromissos aceitam também a própria Solve (cliente interno), que fica fora da Carteira.
 const clientesComp = () => st.clientes.filter(c => c.situacao !== 'Encerrado').sort((a, b) => (b.interno - a.interno) || a.nome.localeCompare(b.nome));
+// Ações e Demandas aceitam "Todos os clientes": os clientes da carteira (fora o interno e os encerrados).
+const COM_TODOS = ['acoes', 'demandas'];
+const naCarteira = cli => { const c = st.cliente(cli); return !!c && !c.interno && c.situacao !== 'Encerrado'; };
+const todosAtivo = () => S.todos && COM_TODOS.includes(route());
+const acoesEsc = () => (todosAtivo() ? st.acoes.filter(a => naCarteira(a.cli)) : acoesC(S.cli));
+const demandasEsc = () => (todosAtivo() ? st.demandas.filter(d => naCarteira(d.cli)) : demandasC(S.cli));
+// Código do cliente como atalho: clicar filtra a tela atual por esse cliente.
+const tagCli = cli => `<button type="button" class="tag tagbtn${st.interno(cli) ? ' solve' : ''}" data-fcli="${esc(cli)}" title="Mostrar só ${esc(cliNome(cli))}">${esc(cli)}</button>`;
 const DSEM = ['dom', 'seg', 'ter', 'qua', 'qui', 'sex', 'sáb'];
 const solveFez = a => a.status === 'Cancelada' && /mesmo fez/i.test(`${a.como} ${a.motivoCancel}`);
 
@@ -153,22 +162,26 @@ const route = () => parseHash().r;
 const FA0 = { q: '', sit: 'abertas', resp: '', area: '', tipo: '' }, FD0 = { tipo: 'todas', st: 'abertas' };
 function hashDe(r) {
   const p = new URLSearchParams();
-  if (!ROUTES[r].global && S.cli) p.set('cli', S.cli);
+  if (!ROUTES[r].global && S.cli) p.set('cli', S.todos && COM_TODOS.includes(r) ? 'todos' : S.cli);
   if (r === 'acoes') for (const k of Object.keys(FA0)) { if (S.fa[k] && S.fa[k] !== FA0[k]) p.set(k, S.fa[k]); }
   if (r === 'demandas') { if (S.fd.tipo !== FD0.tipo) p.set('tipo', S.fd.tipo); if (S.fd.st !== FD0.st) p.set('st', S.fd.st); }
   if (r === 'forum' && S.step) p.set('passo', String(S.step + 1));
   if (r === 'semana' && S.pessoaSemana) p.set('p', S.pessoaSemana);
+  if (r === 'semana' && S.semCli) p.set('c', S.semCli);
   if (r === 'agenda') { if (S.fc.p) p.set('p', S.fc.p); if (S.fc.cli) p.set('c', S.fc.cli); if (S.fc.ver !== 'pendentes') p.set('ver', S.fc.ver); }
   const q = p.toString();
   return '#' + r + (q ? '?' + q : '');
 }
 function lerHash() {
   const { r, p } = parseHash();
-  if (p.get('cli')) S.cli = p.get('cli');
+  const c = p.get('cli');
+  if (c && c !== 'todos') S.cli = c;
+  if (COM_TODOS.includes(r)) S.todos = c === 'todos';
   if (r === 'acoes') S.fa = Object.fromEntries(Object.keys(FA0).map(k => [k, p.get(k) || FA0[k]]));
   if (r === 'demandas') S.fd = { tipo: p.get('tipo') || FD0.tipo, st: p.get('st') || FD0.st };
   if (r === 'forum') { const n = Number(p.get('passo')); S.step = n >= 1 && n <= 5 ? n - 1 : S.step; }
   if (r === 'semana' && p.get('p')) S.pessoaSemana = p.get('p');
+  if (r === 'semana') S.semCli = p.get('c') || '';
   if (r === 'agenda') S.fc = { p: p.get('p') || '', cli: p.get('c') || '', ver: p.get('ver') || 'pendentes' };
 }
 // Atualiza o endereço sem criar uma entrada nova no histórico (usado ao mexer em filtros).
@@ -209,12 +222,13 @@ function render() {
   const comDados = st.clientes.filter(c => !c.interno && st.temDados(c.id));
   if (!S.cli || !st.cliente(S.cli) || st.interno(S.cli)) S.cli = (comDados[0] || st.clientes[0] || {}).id || null;
   const sel = $('#selCli');
-  sel.innerHTML = clientesOrd().map(c => `<option value="${esc(c.id)}"${c.id === S.cli ? ' selected' : ''}>${esc(c.nome)}${st.temDados(c.id) ? '' : ' (a migrar)'}</option>`).join('');
+  const tod = todosAtivo();
+  sel.innerHTML = (COM_TODOS.includes(r) ? `<option value="todos"${tod ? ' selected' : ''}>Todos os clientes</option>` : '') + clientesOrd().map(c => `<option value="${esc(c.id)}"${!tod && c.id === S.cli ? ' selected' : ''}>${esc(c.nome)}${st.temDados(c.id) ? '' : ' (a migrar)'}</option>`).join('');
   $('#cliWrap').hidden = !!R.global; $('#grpCli').hidden = !!R.global; sel.disabled = !!R.global;
-  $('#eyebrow').textContent = R.global ? 'Solve Group' : cliNome(S.cli);
+  $('#eyebrow').textContent = R.global ? 'Solve Group' : tod ? 'Todos os clientes' : cliNome(S.cli);
   $('#ttl').textContent = R.t;
   document.querySelectorAll('#nav a').forEach(a => { if (a.dataset.r === r) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); });
-  $('#cntAb').textContent = S.cli ? M(acoesC(S.cli)).ab : '';
+  $('#cntAb').textContent = S.cli ? M(acoesEsc()).ab : '';
   const eu = st.eu();
   const urg = eu ? st.compromissos.filter(c => c.resp === eu.id && c.status === 'Pendente' && c.data && c.data <= HOJE).length : 0;
   $('#cntComp').textContent = urg || '';
@@ -375,27 +389,30 @@ function indicadoresPanel() {
 
 /* ---------- Demandas ---------- */
 function renderDemandas() {
-  if (!st.temDados(S.cli)) return semDados();
+  const todos = todosAtivo();
+  if (!todos && !st.temDados(S.cli)) return semDados();
   const f = S.fd;
-  let list = demandasC(S.cli).map(d => ({ d, i: infoDem(d) }));
+  let list = demandasEsc().map(d => ({ d, i: infoDem(d) }));
   if (f.tipo !== 'todas') list = list.filter(x => x.d.tipo === f.tipo);
   if (f.st === 'abertas') list = list.filter(x => x.i.aberta);
   if (f.st === 'semplano') list = list.filter(x => x.i.status === 'Sem plano de ação');
   if (f.st === 'validar') list = list.filter(x => x.i.validar);
   if (f.st === 'encerradas') list = list.filter(x => !x.i.aberta);
   list.sort((a, b) => SEV[a.i.farol] - SEV[b.i.farol] || (a.d.prioridade || 99) - (b.d.prioridade || 99) || b.i.venc - a.i.venc || a.d.titulo.localeCompare(b.d.titulo));
-  const tipos = [...new Set(demandasC(S.cli).map(d => d.tipo))];
+  const tipos = [...new Set(demandasEsc().map(d => d.tipo))];
+  const nCli = new Set(list.map(x => x.d.cli)).size;
   const seg = (k, v, opts) => `<div class="seg" role="group">${opts.map(([val, lab]) => `<button data-fd-${k}="${esc(val)}" aria-pressed="${v === val}">${lab}</button>`).join('')}</div>`;
   return `
   <p class="lede-sub" style="margin:0">Uma demanda é o que entra na gestão: pendência, questão crítica, entrega de uma frente, deliberação ou desvio de indicador. O status dela vem das ações; o encerramento é confirmado aqui.</p>
   <div class="toolbar">
+    ${filtroCliHtml()}
     ${seg('tipo', f.tipo, [['todas', 'Todas'], ...['Questão crítica', 'Pendência', 'Entrega de frente', 'Deliberação do fórum', 'Desvio de indicador'].filter(t => tipos.includes(t)).map(t => [t, t === 'Questão crítica' ? 'Questões críticas' : t === 'Pendência' ? 'Pendências' : t === 'Entrega de frente' ? 'Entregas de frente' : t])])}
     ${seg('st', f.st, [['abertas', 'Abertas'], ['semplano', 'Sem plano'], ['validar', 'Validar encerramento'], ['encerradas', 'Encerradas'], ['todas', 'Todas']])}
-    <span class="small muted">${list.length} ${plural(list.length, 'demanda', 'demandas')}</span>
+    <span class="small muted">${list.length} ${plural(list.length, 'demanda', 'demandas')}${todos ? ` de ${nCli} ${plural(nCli, 'cliente', 'clientes')}` : ''}</span>
   </div>
-  <div class="tablewrap" style="overflow:visible">${list.length ? list.map(({ d, i }) => demRow(d, i)).join('') : '<div class="empty" style="margin:16px">Nenhuma demanda com esses filtros.</div>'}</div>`;
+  <div class="tablewrap" style="overflow:visible">${list.length ? list.map(({ d, i }) => demRow(d, i, todos)).join('') : '<div class="empty" style="margin:16px">Nenhuma demanda com esses filtros.</div>'}</div>`;
 }
-function demRow(d, i) {
+function demRow(d, i, comCli) {
   const open = S.demOpen.has(d.id);
   const fr = d.frente ? st.frente(d.frente) : null;
   const naoCanc = i.ac.length - i.ac.filter(a => a.status === 'Cancelada').length;
@@ -407,7 +424,7 @@ function demRow(d, i) {
   return `<div class="dem" id="dem-${esc(d.id)}">
     <button data-dem="${esc(d.id)}" aria-expanded="${open}">${dot(i.farol, FAROL[i.farol])}
       <span style="min-width:0"><span class="t">${d.prioridade ? `<span class="prio">P${d.prioridade}</span> ` : ''}${esc(d.titulo)}</span>
-        <span class="m"><span class="tag">${esc(d.tipo)}</span>${fr ? `<span>${esc(fr.nome)}</span>` : ''}<span>${d.resp ? esc(st.nome(d.resp)) : '<b style="color:var(--bad)">sem dono nominal</b>'}</span>
+        <span class="m">${comCli ? `<span class="tag${st.interno(d.cli) ? ' solve' : ''}" title="${esc(cliNome(d.cli))}">${esc(d.cli)}</span>` : ''}<span class="tag">${esc(d.tipo)}</span>${fr ? `<span>${esc(fr.nome)}</span>` : ''}<span>${d.resp ? esc(st.nome(d.resp)) : '<b style="color:var(--bad)">sem dono nominal</b>'}</span>
         ${i.ac.length ? `<span>${i.conc}/${naoCanc} concluídas</span>` : ''}${i.venc ? `<span style="color:var(--bad);font-weight:600">${i.venc} ${plural(i.venc, 'vencida', 'vencidas')}</span>` : ''}${i.semp ? `<span style="color:var(--warn)">${i.semp} sem prazo</span>` : ''}
         ${d.nota ? '<span class="pill warn">nota da migração</span>' : ''}</span></span>
       <span class="r">${stPill}</span>
@@ -416,17 +433,41 @@ function demRow(d, i) {
       ${notas.length ? `<div class="note"><b>O que a migração encontrou</b><ul>${notas.map(x => `<li>${esc(x)}</li>`).join('')}</ul></div>` : ''}
       <div class="small muted"><span class="mono">${esc(d.id)}</span>${d.origem ? ' · origem: ' + esc(d.origem) : ''}${d.prazo ? ` · prazo da demanda: ${fmt(d.prazo)}` : ''}${d.encerrada && d.dataEnc ? ` · encerrada em ${fmtF(d.dataEnc)}` : ''}</div>
       ${i.ac.length ? `<div style="overflow-x:auto"><table class="mini"><tbody>${sortAcoes(i.ac).map(a => `<tr data-acao="${esc(a.id)}"><td class="c-id">${esc(a.id)}</td><td><button class="linkbtn plain" data-acao="${esc(a.id)}">${esc(a.acao)}</button></td><td class="c-nw">${esc(st.nome(a.resp) || '—')}</td><td class="c-nw">${pill(situacao(a))}</td></tr>`).join('')}</tbody></table></div>` : ''}
-      <div class="row-actions">${i.aberta ? `<button class="btn sm" data-do="capturar" data-dem-pre="${esc(d.id)}">+ ${i.ac.length ? 'Nova ação nesta demanda' : 'Criar a primeira ação'}</button>` : ''}
+      <div class="row-actions">${i.aberta ? `<button class="btn sm" data-do="capturar" data-dem-pre="${esc(d.id)}">+ ${i.ac.length ? 'Nova ação nesta demanda' : 'Criar a primeira ação'}</button><button class="btn sm" data-do="respDem" data-id="${esc(d.id)}">Trocar responsável</button>` : ''}
         ${i.validar ? `<button class="btn sm primary" data-do="encerrarDem" data-id="${esc(d.id)}">Confirmar encerramento</button>` : ''}</div>
     </div>` : ''}
   </div>`;
+}
+
+/* ---------- seletor de cliente nas barras de filtro ---------- */
+// Ações e Demandas: mesmo valor do seletor lateral, com "Todos os clientes".
+function filtroCliHtml() {
+  const cs = clientesOrd().filter(c => naCarteira(c.id) && st.temDados(c.id));
+  if (S.cli && !cs.some(c => c.id === S.cli) && st.cliente(S.cli)) cs.unshift(st.cliente(S.cli));
+  const v = todosAtivo() ? 'todos' : S.cli;
+  return `<select id="fcli" aria-label="Cliente"><option value="todos"${v === 'todos' ? ' selected' : ''}>Todos os clientes</option>${cs.map(c => `<option value="${esc(c.id)}"${c.id === v ? ' selected' : ''}>${esc(c.nome)}</option>`).join('')}</select>`;
+}
+function escolherCliente(v) {
+  if (v === 'todos') { S.todos = true; }
+  else { S.todos = false; S.cli = v; try { localStorage.setItem('gp.cli', S.cli); } catch (x) { /* sem storage */ } }
+  S.demOpen.clear(); S.step = 0;
+}
+// Atalho da tag: filtra a tela atual pelo cliente da tag.
+function filtrarPelaTag(cli) {
+  const r = route();
+  if (r === 'agenda') S.fc.cli = cli;
+  else if (r === 'semana') S.semCli = cli;
+  else if (COM_TODOS.includes(r)) escolherCliente(cli);
+  else return;
+  render();
+  const f = $(r === 'agenda' ? '#cCliF' : r === 'semana' ? '#fsCli' : '#fcli'); if (f) f.focus();
 }
 
 /* ---------- Ações ---------- */
 const SIT = [['abertas', 'Abertas'], ['vencidas', 'Vencidas'], ['v7', 'Vencem em 7 dias'], ['semprazo', 'Sem prazo'], ['semdono', 'Sem dono nominal'], ['repact', 'Reprogramadas e vencidas'], ['solvefez', 'Canceladas: Solve executou'], ['concluidas', 'Concluídas'], ['canceladas', 'Canceladas'], ['todas', 'Todas']];
 function filtraAcoes() {
   const f = S.fa, q = f.q.trim().toLowerCase();
-  return sortAcoes(acoesC(S.cli).filter(a => {
+  return sortAcoes(acoesEsc().filter(a => {
     const s = situacao(a);
     switch (f.sit) {
       case 'abertas': if (!aberta(a)) return false; break;
@@ -444,31 +485,34 @@ function filtraAcoes() {
     if (f.area && a.area !== f.area) return false;
     const d = st.demanda(a.demanda);
     if (f.tipo && (!d || d.tipo !== f.tipo)) return false;
-    if (q && !`${a.acao} ${d ? d.titulo : ''} ${a.id} ${st.nome(a.resp)} ${a.como}`.toLowerCase().includes(q)) return false;
+    if (q && !`${a.acao} ${d ? d.titulo : ''} ${a.id} ${st.nome(a.resp)} ${a.como} ${cliNome(a.cli)}`.toLowerCase().includes(q)) return false;
     return true;
   }));
 }
 function renderAcoes() {
-  if (!st.temDados(S.cli)) return semDados();
-  const f = S.fa, list = filtraAcoes(), lista = acoesC(S.cli);
+  const todos = todosAtivo();
+  if (!todos && !st.temDados(S.cli)) return semDados();
+  const f = S.fa, list = filtraAcoes(), lista = acoesEsc();
   const resps = [...new Set(lista.map(a => a.resp).filter(Boolean))].sort((a, b) => st.nome(a).localeCompare(st.nome(b)));
   const areas = [...new Set(lista.map(a => a.area).filter(Boolean))].sort((a, b) => a.localeCompare(b));
-  const tipos = [...new Set(demandasC(S.cli).map(d => d.tipo))];
+  const tipos = [...new Set(demandasEsc().map(d => d.tipo))];
+  const nCli = new Set(list.map(a => a.cli)).size;
   const opt = (v, cur, lab) => `<option value="${esc(v)}"${v === cur ? ' selected' : ''}>${esc(lab)}</option>`;
   return `
   <div class="toolbar">
     <input type="search" id="fq" placeholder="Buscar ação, demanda, código ou pessoa" value="${esc(f.q)}" aria-label="Buscar">
+    ${filtroCliHtml()}
     <select id="fsit" aria-label="Situação">${SIT.map(([v, l]) => opt(v, f.sit, l)).join('')}</select>
     <select id="fresp" aria-label="Responsável">${opt('', f.resp, 'Todos os responsáveis')}${resps.map(r => opt(r, f.resp, st.nome(r))).join('')}</select>
     <select id="farea" aria-label="Área">${opt('', f.area, 'Todas as áreas')}${areas.map(r => opt(r, f.area, r)).join('')}</select>
     <select id="ftipo" aria-label="Tipo de demanda">${opt('', f.tipo, 'Todos os tipos')}${tipos.map(r => opt(r, f.tipo, r)).join('')}</select>
   </div>
-  <div class="small muted">${list.length} ${plural(list.length, 'ação', 'ações')} · ordenadas pela urgência: vencidas primeiro, pelo maior atraso</div>
+  <div class="small muted">${list.length} ${plural(list.length, 'ação', 'ações')}${todos ? ` de ${nCli} ${plural(nCli, 'cliente', 'clientes')} · números somados da carteira` : ''} · ordenadas pela urgência: vencidas primeiro, pelo maior atraso</div>
   <div class="tablewrap"><table class="cards">
     <thead><tr><th>Código</th><th>Ação</th><th>Demanda</th><th>Responsável</th><th>Prazo</th><th>Situação</th></tr></thead>
     <tbody>${list.length ? list.map(a => { const d = st.demanda(a.demanda); return `<tr class="click" data-acao="${esc(a.id)}">
       <td class="c-id" data-l="Código">${esc(a.id)}</td>
-      <td class="c-main" style="min-width:240px"><button class="linkbtn plain" data-acao="${esc(a.id)}">${esc(a.acao)}</button>${a.reprogramacoes.length ? `<span class="sub">${a.reprogramacoes.length}ª reprogramação · prazo original ${fmt(a.prazoOriginal)}</span>` : ''}</td>
+      <td class="c-main" style="min-width:240px">${todos ? tagCli(a.cli) + ' ' : ''}<button class="linkbtn plain" data-acao="${esc(a.id)}">${esc(a.acao)}</button>${a.reprogramacoes.length ? `<span class="sub">${a.reprogramacoes.length}ª reprogramação · prazo original ${fmt(a.prazoOriginal)}</span>` : ''}</td>
       <td data-l="Demanda" style="min-width:180px">${esc(d ? d.titulo : a.demanda)}<span class="sub">${esc(d ? d.tipo : '')}</span></td>
       <td class="c-nw" data-l="Responsável">${respHtml(a.resp)}</td>
       <td class="num c-nw" data-l="Prazo">${fmt(a.prazo)}</td>
@@ -559,7 +603,7 @@ function ataEstado(fo) {
   return `<span class="muted">${fo && fo.ata ? `Ata de hoje salva em ${esc(fo.id)}.` : 'A ata fica no histórico de fóruns do cliente.'}</span>`;
 }
 function quickTable(l, showCli) {
-  return `<div style="overflow-x:auto"><table class="mini cards"><tbody>${l.map(a => { const d = st.demanda(a.demanda); return `<tr data-acao="${esc(a.id)}"><td class="c-id">${esc(a.id)}</td><td class="c-main" style="min-width:220px">${showCli ? `<span class="tag">${esc(a.cli)}</span> ` : ''}<button class="linkbtn plain" data-acao="${esc(a.id)}">${esc(a.acao)}</button><span class="sub" style="display:block;color:var(--muted);font-size:.8rem">${esc(d ? d.titulo : '')}${a.reprogramacoes.length >= 2 ? ` · ${a.reprogramacoes.length}ª reprogramação` : ''}</span></td><td class="c-nw">${esc(st.nome(a.resp))}</td><td class="c-nw">${pill(situacao(a))}</td>
+  return `<div style="overflow-x:auto"><table class="mini cards"><tbody>${l.map(a => { const d = st.demanda(a.demanda); return `<tr data-acao="${esc(a.id)}"><td class="c-id">${esc(a.id)}</td><td class="c-main" style="min-width:220px">${showCli ? tagCli(a.cli) + ' ' : ''}<button class="linkbtn plain" data-acao="${esc(a.id)}">${esc(a.acao)}</button><span class="sub" style="display:block;color:var(--muted);font-size:.8rem">${esc(d ? d.titulo : '')}${a.reprogramacoes.length >= 2 ? ` · ${a.reprogramacoes.length}ª reprogramação` : ''}</span></td><td class="c-nw">${esc(st.nome(a.resp))}</td><td class="c-nw">${pill(situacao(a))}</td>
     <td class="c-nw c-act" style="text-align:right"><span class="row-actions" style="justify-content:flex-end"><button class="btn sm" data-q="concluir" data-id="${esc(a.id)}">Concluir</button><button class="btn sm" data-q="reprog" data-id="${esc(a.id)}">${a.prazo ? 'Novo prazo' : 'Definir prazo'}</button></span></td></tr>`; }).join('')}</tbody></table></div>`;
 }
 function ata(cli) {
@@ -622,7 +666,7 @@ function sugerePendencia(c) {
 const contraNome = c => (c.contra ? st.nome(c.contra) : '');
 function compRows(l, showResp, showCli = true) {
   return `<div style="overflow-x:auto"><table class="mini cards"><tbody>${l.map(c => { const s = sitComp(c), sug = sugerePendencia(c); return `<tr data-comp="${esc(c.id)}">
-    <td class="c-main" style="min-width:220px">${showCli ? `<span class="tag${st.interno(c.cli) ? ' solve' : ''}">${esc(c.cli)}</span> ` : ''}<button class="linkbtn plain" data-comp="${esc(c.id)}">${esc(c.oque)}</button>
+    <td class="c-main" style="min-width:220px">${showCli ? tagCli(c.cli) + ' ' : ''}<button class="linkbtn plain" data-comp="${esc(c.id)}">${esc(c.oque)}</button>
       <span class="sub" style="display:block;color:var(--muted);font-size:.8rem">${[c.contra ? 'com ' + esc(contraNome(c)) : '', showResp ? esc(st.nome(c.resp)) : '', c.rec !== 'Única' ? '↻ ' + c.rec.toLowerCase() : '',
         c.status === 'Pendente' && c.dataOrig && c.data !== c.dataOrig ? 'remarcado de ' + fmt(c.dataOrig) : '', c.demanda ? 'virou pendência ' + esc(c.demanda) : ''].filter(Boolean).join(' · ')}</span></td>
     <td class="c-nw">${pill(s)}${sug ? ' <span class="pill acc">virar pendência?</span>' : ''}</td>
@@ -673,7 +717,7 @@ function renderAgenda() {
   <div class="grid3">
     <div class="stack">${corpo}</div>
     <section class="panel"><header><h2>Cumprimento</h2><span class="small muted">últimos 90 dias${tot.t ? ` · ${Math.round(tot.dia * 100 / tot.t)}% no dia` : ''}</span></header>
-      ${cp.length ? `<div style="overflow-x:auto"><table class="mini"><thead><tr><th>Com quem</th><th class="num">No dia</th><th class="num" title="Feito com atraso, não ocorreu ou ainda atrasado">Falhou</th><th class="num">%</th></tr></thead><tbody>${cp.slice(0, 12).map(x => `<tr><td><span class="tag${st.interno(x.cli) ? ' solve' : ''}">${esc(x.cli)}</span> ${esc(x.contra ? st.nome(x.contra) : 'sem contraparte')}<span class="sub" style="display:block;color:var(--muted);font-size:.78rem">${x.t} no período${x.atr ? ` · ${x.atr} com atraso` : ''}${x.nao ? ` · ${x.nao} não ${plural(x.nao, 'ocorreu', 'ocorreram')}` : ''}${x.pend ? ` · ${x.pend} ${plural(x.pend, 'atrasado', 'atrasados')}` : ''}</span></td><td class="num">${x.dia}</td><td class="num">${x.t - x.dia}</td><td class="num" style="${x.pct < 70 ? 'color:var(--bad);font-weight:600' : ''}">${x.pct}%</td></tr>`).join('')}</tbody></table></div>` : '<div class="empty small">O cumprimento aparece quando os primeiros compromissos chegarem à data.</div>'}
+      ${cp.length ? `<div style="overflow-x:auto"><table class="mini"><thead><tr><th>Com quem</th><th class="num">No dia</th><th class="num" title="Feito com atraso, não ocorreu ou ainda atrasado">Falhou</th><th class="num">%</th></tr></thead><tbody>${cp.slice(0, 12).map(x => `<tr><td>${tagCli(x.cli)} ${esc(x.contra ? st.nome(x.contra) : 'sem contraparte')}<span class="sub" style="display:block;color:var(--muted);font-size:.78rem">${x.t} no período${x.atr ? ` · ${x.atr} com atraso` : ''}${x.nao ? ` · ${x.nao} não ${plural(x.nao, 'ocorreu', 'ocorreram')}` : ''}${x.pend ? ` · ${x.pend} ${plural(x.pend, 'atrasado', 'atrasados')}` : ''}</span></td><td class="num">${x.dia}</td><td class="num">${x.t - x.dia}</td><td class="num" style="${x.pct < 70 ? 'color:var(--bad);font-weight:600' : ''}">${x.pct}%</td></tr>`).join('')}</tbody></table></div>` : '<div class="empty small">O cumprimento aparece quando os primeiros compromissos chegarem à data.</div>'}
       <p class="small muted" style="margin:10px 0 0">Conta pela data original: remarcar e fazer depois conta como atraso.</p>
     </section>
   </div>`;
@@ -681,25 +725,31 @@ function renderAgenda() {
 
 /* ---------- Minha semana ---------- */
 function renderSemana() {
-  const ab = st.acoes.filter(a => aberta(a) && st.nominal(a.resp));
+  const fc = S.semCli, doCli = x => !fc || x.cli === fc;
+  const ab = st.acoes.filter(a => aberta(a) && st.nominal(a.resp) && doCli(a));
   const cont = {}; ab.forEach(a => { cont[a.resp] = (cont[a.resp] || 0) + 1; });
-  const compAb = st.compromissos.filter(c => c.status === 'Pendente' && c.resp);
+  const compAb = st.compromissos.filter(c => c.status === 'Pendente' && c.resp && doCli(c));
   const contC = {}; compAb.forEach(c => { contC[c.resp] = (contC[c.resp] || 0) + 1; });
   const pes = [...new Set([...Object.keys(cont), ...Object.keys(contC)])].map(k => [k, cont[k] || 0, contC[k] || 0])
     .sort((a, b) => b[1] - a[1] || b[2] - a[2] || st.nome(a[0]).localeCompare(st.nome(b[0])));
   const eu = st.eu();
   const tem = k => !!(cont[k] || contC[k]);
-  if (!S.pessoaSemana || !tem(S.pessoaSemana)) S.pessoaSemana = eu && tem(eu.id) ? eu.id : (pes[0] || [])[0];
-  if (!S.pessoaSemana) return '<div class="empty">Nenhuma ação aberta com responsável nominal.</div>';
+  // Com cliente filtrado, a pessoa escolhida continua na tela mesmo sem nada nele (em vez de trocar de pessoa sem avisar).
+  const temEmAlgum = k => st.acoes.some(a => a.resp === k && aberta(a) && st.nominal(k)) || st.compromissos.some(c => c.resp === k && c.status === 'Pendente');
+  if (!S.pessoaSemana || !(tem(S.pessoaSemana) || (fc && temEmAlgum(S.pessoaSemana)))) S.pessoaSemana = eu && tem(eu.id) ? eu.id : (pes[0] || [])[0];
+  if (S.pessoaSemana && !tem(S.pessoaSemana)) pes.unshift([S.pessoaSemana, 0, 0]);
+  const optC = (v, lab) => `<option value="${esc(v)}"${v === fc ? ' selected' : ''}>${esc(lab)}</option>`;
+  const selCli = `<select id="fsCli" aria-label="Cliente">${optC('', 'Todos os clientes')}${clientesComp().map(c => optC(c.id, c.nome)).join('')}</select>`;
+  if (!S.pessoaSemana) return `<div class="toolbar">${selCli}</div><div class="empty">${fc ? `Nada aberto em ${esc(cliNome(fc))} com responsável nominal.` : 'Nenhuma ação aberta com responsável nominal.'}</div>`;
   const p = S.pessoaSemana, minhas = sortAcoes(ab.filter(a => a.resp === p));
   const meusComp = sortComp(compAb.filter(c => c.resp === p && c.data && c.data <= LIM7));
   const varios = new Set(minhas.map(a => a.cli)).size > 1;
   const sec = [['Vencidas', minhas.filter(a => situacao(a).o === 1)], [`Vencem até ${fmt(LIM7)}`, minhas.filter(a => situacao(a).o === 2)], ['Sem prazo', minhas.filter(a => situacao(a).o === 3)], ['Depois', minhas.filter(a => situacao(a).o === 4)]];
   return `
   <p class="lede-sub" style="margin:0">O que vence, o que atrasou e o que depende de cada pessoa, em todos os clientes. A mensagem de cobrança sai pronta para o WhatsApp.</p>
-  <div class="toolbar"><label class="small muted" for="selP">Ver como</label><select id="selP">${pes.map(([n, c, k]) => `<option value="${esc(n)}"${n === p ? ' selected' : ''}>${esc(st.nome(n))}${st.pessoa(n) && st.pessoa(n).empresa === 'Solve' ? ' (Solve)' : ''} · ${c} ${plural(c, 'ação', 'ações')}${k ? `, ${k} ${plural(k, 'compromisso', 'compromissos')}` : ''}</option>`).join('')}</select>${eu && p === eu.id ? '<span class="pill acc">você</span>' : ''}</div>
+  <div class="toolbar"><label class="small muted" for="selP">Ver como</label><select id="selP">${pes.map(([n, c, k]) => `<option value="${esc(n)}"${n === p ? ' selected' : ''}>${esc(st.nome(n))}${st.pessoa(n) && st.pessoa(n).empresa === 'Solve' ? ' (Solve)' : ''} · ${c} ${plural(c, 'ação', 'ações')}${k ? `, ${k} ${plural(k, 'compromisso', 'compromissos')}` : ''}</option>`).join('')}</select>${eu && p === eu.id ? '<span class="pill acc">você</span>' : ''}${selCli}</div>
   <div class="grid3">
-    <div class="stack">${meusComp.length ? `<section class="panel"><header><h2>Compromissos até ${fmt(LIM7)}</h2><a class="btn sm ghost" style="text-decoration:none" href="#agenda?p=${encodeURIComponent(p)}">Ver todos</a></header>${compRows(meusComp, false)}</section>` : ''}${sec.filter(s => s[1].length).map(([t, l]) => `<section class="panel"><header><h2>${t}</h2><span class="small muted">${l.length}</span></header>${quickTable(l, varios)}</section>`).join('') || '<div class="empty">Nenhuma ação aberta.</div>'}</div>
+    <div class="stack">${meusComp.length ? `<section class="panel"><header><h2>Compromissos até ${fmt(LIM7)}</h2><a class="btn sm ghost" style="text-decoration:none" href="#agenda?p=${encodeURIComponent(p)}${fc ? '&c=' + encodeURIComponent(fc) : ''}">Ver todos</a></header>${compRows(meusComp, false)}</section>` : ''}${sec.filter(s => s[1].length).map(([t, l]) => `<section class="panel"><header><h2>${t}</h2><span class="small muted">${l.length}</span></header>${quickTable(l, varios)}</section>`).join('') || `<div class="empty">${fc ? `Nada aberto para ${esc(st.nome(p))} em ${esc(cliNome(fc))}.` : 'Nenhuma ação aberta.'}</div>`}</div>
     <section class="panel"><header><h2>Mensagem de cobrança</h2><button class="btn sm" data-do="copiarCob">Copiar</button></header><textarea class="out" id="cobTxt" readonly aria-label="Mensagem de cobrança" style="min-height:260px">${esc(cobranca(p, sec, varios))}</textarea></section>
   </div>`;
 }
@@ -763,6 +813,10 @@ function compDrawerHtml() {
       <div class="field"><label for="rcHora">Hora (opcional)</label><input type="time" id="rcHora" value="${esc(c.hora)}"></div>
       <div class="full small muted">Remarcar não pede motivo. A data original continua valendo para medir o cumprimento${c.rec !== 'Única' ? ' e para a próxima repetição' : ''}.</div>
       <div class="full row-actions"><button class="btn primary" type="submit">Salvar nova data</button><button class="btn" type="button" data-do="modo" data-m="">Voltar</button><span class="small err-text" id="rcErr" role="alert"></span></div></form>`;
+  if (modo === 'resp') form = `<form id="fRespC" class="form boxed">
+      <div class="field full"><label for="tResp">Quem cumpre</label><select id="tResp" required><option value="">Escolha</option>${optPessoas(c.cli, c.resp)}</select></div>
+      <div class="full small muted">${c.rec !== 'Única' ? 'Vale para esta vez e para as próximas da série, que são criadas a partir desta. ' : ''}A data e o cumprimento não mudam.</div>
+      <div class="full row-actions"><button class="btn primary" type="submit">Salvar responsável</button><button class="btn" type="button" data-do="modo" data-m="">Voltar</button><span class="small err-text" id="tErr" role="alert"></span></div></form>`;
   return `<aside class="drawer" role="dialog" aria-modal="true" aria-labelledby="dwT">
     <div class="dh"><div style="min-width:0"><div class="label mono">${esc(c.id)} · ${esc(cliNome(c.cli))}</div><h2 id="dwT" tabindex="-1" style="margin-top:4px">${esc(c.oque)}</h2><div style="margin-top:8px" class="row-actions">${pill(s)}<span class="pill ok">${esc(c.status)}</span>${sugerePendencia(c) ? '<span class="pill acc">virar pendência?</span>' : ''}</div></div><button class="btn sm ghost xbtn" data-do="fechar" aria-label="Fechar">✕</button></div>
     <div class="db">
@@ -770,7 +824,7 @@ function compDrawerHtml() {
         <dt>O QUÊ</dt><dd>${esc(c.oque)} <span class="tag">${esc(c.tipo)}</span></dd>
         <dt>COM QUEM</dt><dd>${c.contra ? esc(contraNome(c)) : '<span class="muted">—</span>'}</dd>
         <dt>QUANDO</dt><dd>${fmtF(c.data)}${c.hora ? ' às ' + esc(c.hora) : ''}${c.dataOrig && c.dataOrig !== c.data ? `<span class="sub">data original ${fmtF(c.dataOrig)}</span>` : ''}${c.realizado ? `<span class="sub">${c.status === 'Feito' ? 'feito' : 'fechado'} em ${fmtF(c.realizado)}</span>` : ''}</dd>
-        <dt>QUEM</dt><dd>${respHtml(c.resp)}</dd>
+        <dt>QUEM</dt><dd>${respHtml(c.resp)}${aberto && !modo ? ' <button class="btn sm ghost" data-do="modo" data-m="resp">Trocar</button>' : ''}</dd>
         <dt>REPETE</dt><dd>${c.rec === 'Única' ? 'Não' : c.rec + (aberto ? ` · a próxima é criada ao fechar esta (${fmt(st.proximaDe(c))})` : '')}</dd>
       </dl>
       ${c.demanda ? `<div class="panel" style="padding:12px;background:var(--surface-2)"><div class="label">Virou pendência</div><button class="linkbtn" data-dem-go="${esc(c.demanda)}" data-cli-set="${esc(c.cli)}" style="margin-top:4px">${esc(st.demanda(c.demanda) ? st.demanda(c.demanda).titulo : c.demanda)}</button></div>` : ''}
@@ -798,6 +852,11 @@ function drawerHtml() {
       ${definir ? '<div class="field"><label>&nbsp;</label><span class="small muted">A ação ainda não tinha prazo; este passa a ser o prazo original.</span></div>' : '<div class="field full"><label for="rMot">Motivo</label><input type="text" id="rMot" required placeholder="Ex.: aguardando NCM da contabilidade"></div>'}
       <div class="full row-actions"><button class="btn primary" type="submit">${definir ? 'Salvar prazo' : 'Salvar novo prazo'}</button><button class="btn" type="button" data-do="modo" data-m="">Voltar</button><span class="small err-text" id="rErr" role="alert"></span></div></form>`;
   }
+  if (modo === 'resp') form = `<form id="fResp" class="form boxed">
+      <div class="field"><label for="tResp">Novo responsável</label><select id="tResp" required><option value="">Escolha</option>${optPessoas(a.cli, a.resp)}</select></div>
+      <div class="field"><label for="tApoio">Apoio (opcional)</label><input id="tApoio" maxlength="255" value="${esc(a.apoio)}" placeholder="Nomes, separados por vírgula"></div>
+      <div class="full small muted">Prazo e histórico de prazo continuam os mesmos. O histórico de versões da lista guarda quem trocou e quando.</div>
+      <div class="full row-actions"><button class="btn primary" type="submit">Salvar responsável</button><button class="btn" type="button" data-do="modo" data-m="">Voltar</button><span class="small err-text" id="tErr" role="alert"></span></div></form>`;
   if (modo === 'cancel') form = `<form id="fCan" class="form boxed">
       <div class="field full"><label for="cMot">Por que cancelar?</label><input type="text" id="cMot" required placeholder="Ex.: substituída por outra ação"></div>
       <div class="full row-actions"><button class="btn danger" type="submit">Cancelar ação</button><button class="btn" type="button" data-do="modo" data-m="">Voltar</button><span class="small err-text" id="cErr" role="alert"></span></div></form>`;
@@ -807,7 +866,7 @@ function drawerHtml() {
       <dl class="w5">
         <dt>O QUÊ</dt><dd>${esc(a.acao)}</dd>
         <dt>POR QUÊ</dt><dd>${a.problema || a.causa ? `${esc(a.problema)}${a.problema && a.causa ? '<br>' : ''}${a.causa ? `<span class="muted">Causa: ${esc(a.causa)}</span>` : ''}` : '<span class="muted">Não registrado</span>'}</dd>
-        <dt>QUEM</dt><dd>${respHtml(a.resp, a.apoio)}</dd>
+        <dt>QUEM</dt><dd>${respHtml(a.resp, a.apoio)}${aberta(a) && !modo ? ' <button class="btn sm ghost" data-do="modo" data-m="resp">Trocar</button>' : ''}</dd>
         <dt>QUANDO</dt><dd>Início ${fmtF(a.inicio)} · prazo ${fmtF(a.prazo)}${a.reprogramacoes.length ? `<span class="sub">prazo original ${fmtF(a.prazoOriginal)}</span>` : ''}${a.conclusao ? `<span class="sub">concluída em ${fmtF(a.conclusao)}</span>` : ''}</dd>
         <dt>ONDE</dt><dd>${esc(a.area) || '<span class="muted">—</span>'}</dd>
         <dt>COMO</dt><dd>${a.como ? esc(a.como) : '<span class="muted">Sem observação</span>'}</dd>
@@ -888,7 +947,21 @@ function lerCompTexto() {
   const achou = r.data || r.hora || r.rec;
   $('#cHint').textContent = achou && r.texto ? `Vai gravar: “${r.texto}”${r.data ? ' · ' + fmtF(r.data) : ''}${r.hora ? ' às ' + r.hora : ''}${r.rec ? ' · repete ' + r.rec.toLowerCase() : ''}` : 'Escreva como falaria: data, hora, “com fulano”, “todo dia 05” ou “toda segunda” preenchem os campos sozinhos.';
 }
+function respDemModalHtml() {
+  const d = st.demanda(S.modal.dem);
+  if (!d) return '';
+  return `<div class="modal" role="dialog" aria-modal="true" aria-labelledby="mT">
+    ${cabModal('Trocar responsável da demanda')}
+    <p class="small muted" style="margin:0"><span class="mono">${esc(d.id)}</span> · ${esc(d.titulo)} · hoje: ${d.resp ? esc(st.nome(d.resp)) : 'sem dono nominal'}</p>
+    <form id="fRespD" class="form">
+      <div class="field full"><label for="tResp">Novo responsável</label><select id="tResp" required><option value="">Escolha</option>${optPessoas(d.cli, d.resp)}</select></div>
+      <div class="full row-actions"><button class="btn primary" type="submit">Salvar responsável</button><span class="small err-text" id="tErr" role="alert"></span></div>
+    </form>
+    <p class="small muted" style="margin:0">As ações da demanda continuam com os responsáveis delas. Para trocar o de uma ação, abra a ação.</p>
+  </div>`;
+}
 function modalHtml() {
+  if (S.modal.kind === 'respDem') return respDemModalHtml();
   if (S.modal.kind === 'comp') return compModalHtml();
   if (S.modal.kind === 'frente') return frenteModalHtml();
   if (S.modal.kind === 'entrega') return entregaModalHtml();
@@ -994,10 +1067,11 @@ function onClick(e) {
   if (!t) return;
   const ds = t.dataset;
   if (ds.tema) { aplicarTema(ds.tema); render(); const b = document.querySelector(`#${t.closest('.tema').id} [data-tema="${ds.tema}"]`); if (b) b.focus(); return; }
-  if (ds.cliSet) S.cli = ds.cliSet;
+  if (ds.fcli) { e.stopPropagation(); filtrarPelaTag(ds.fcli); return; }
+  if (ds.cliSet) { S.cli = ds.cliSet; S.todos = false; }
   if (ds.cliGo) { S.cli = ds.cliGo; go('visao'); return; }
-  if (ds.sig) { e.preventDefault(); S.fa = { ...FA0, sit: ds.sig }; S.drawer = null; go('acoes'); return; }
-  if (ds.resp) { S.fa = { ...FA0, resp: ds.resp }; go('acoes'); return; }
+  if (ds.sig) { e.preventDefault(); S.fa = { ...FA0, sit: ds.sig }; S.todos = false; S.drawer = null; go('acoes'); return; }
+  if (ds.resp) { S.fa = { ...FA0, resp: ds.resp }; S.todos = false; go('acoes'); return; }
   if (ds.demGo) { S.demOpen.add(ds.demGo); S.fd = { tipo: 'todas', st: 'todas' }; S.drawer = null; go('demandas'); setTimeout(() => { const el = document.getElementById('dem-' + ds.demGo); if (el) el.scrollIntoView({ block: 'center' }); }, 30); return; }
   if (ds.dem) { S.demOpen.has(ds.dem) ? S.demOpen.delete(ds.dem) : S.demOpen.add(ds.dem); render(); const b = document.querySelector(`[data-dem="${CSS.escape(ds.dem)}"]`); if (b) b.focus(); return; }
   if (ds.fdTipo) { S.fd.tipo = ds.fdTipo; render(); return; }
@@ -1013,7 +1087,8 @@ function onClick(e) {
   if (ds.go) { if (ds.fd) S.fd = { tipo: 'todas', st: ds.fd }; go(ds.go); return; }
   switch (ds.do) {
     case 'fechar': fechar(); break;
-    case 'modo': S.drawer.modo = ds.m || null; renderLayer(); { const i = $(ds.m === 'cancel' ? '#cMot' : ds.m === 'remarcar' ? '#rcData' : '#rPrazo'); if (i) i.focus(); } break;
+    case 'modo': S.drawer.modo = ds.m || null; renderLayer(); { const i = $(ds.m === 'cancel' ? '#cMot' : ds.m === 'remarcar' ? '#rcData' : ds.m === 'resp' ? '#tResp' : ds.m ? '#rPrazo' : '#dwT'); if (i) i.focus(); } break;
+    case 'respDem': S.drawer = null; S.modal = { kind: 'respDem', dem: ds.id }; renderLayer(); { const i = $('#tResp'); if (i) i.focus(); } break;
     case 'novoComp': {
       const r = ROUTES[route()];
       S.drawer = null; S.modal = { kind: 'comp', cli: (r.global ? S.fc.cli : '') || S.cli }; renderLayer(); { const i = $('#cOque'); if (i) i.focus(); } break;
@@ -1036,7 +1111,7 @@ function onClick(e) {
     case 'concluir': { const a = st.acao(S.drawer.id); concluirComDesfazer(a); break; }
     case 'iniciar': { const a = st.acao(S.drawer.id); grava(() => st.iniciar(a), `${a.id} em andamento`); break; }
     case 'encerrarDem': { const d = st.demanda(ds.id); if (d) grava(() => st.encerrarDemanda(d), 'Demanda encerrada', () => grava(() => st.reabrirDemanda(d), 'Demanda reaberta')); break; }
-    case 'capturar': S.drawer = null; S.modal = { dem: ds.demPre || '', cli: S.cli }; renderLayer(); { const i = $('#mAcao'); if (i) i.focus(); } break;
+    case 'capturar': S.drawer = null; S.modal = { dem: ds.demPre || '', cli: (ds.demPre && st.demanda(ds.demPre) ? st.demanda(ds.demPre).cli : S.cli) }; renderLayer(); { const i = $('#mAcao'); if (i) i.focus(); } break;
     case 'novaFrente': S.drawer = null; S.modal = { kind: 'frente', cli: S.cli }; renderLayer(); { const i = $('#nfNome'); if (i) i.focus(); } break;
     case 'novaEntrega': S.drawer = null; S.modal = { kind: 'entrega', fr: ds.fr }; renderLayer(); { const i = $('#neTit'); if (i) i.focus(); } break;
     case 'copiarAta': copiar($('#ataTxt').value, $('#ataTxt')); break;
@@ -1065,6 +1140,19 @@ function onSubmit(e) {
     const m = $('#rMot').value.trim();
     if (!m) { $('#rErr').textContent = 'Informe o motivo: sem motivo, o novo prazo não é aceito.'; return; }
     grava(async () => { await st.reprogramar(a, p, m); S.drawer = { id: a.id, modo: null }; }, `Novo prazo de ${a.id}: ${fmt(p)}`);
+  }
+  if (f.id === 'fResp' || f.id === 'fRespC' || f.id === 'fRespD') {
+    const tipo = f.id === 'fResp' ? 'acao' : f.id === 'fRespC' ? 'comp' : 'dem';
+    const obj = tipo === 'acao' ? st.acao(S.drawer.id) : tipo === 'comp' ? st.compromisso(S.drawer.comp) : st.demanda(S.modal.dem);
+    const resp = $('#tResp').value, apoio = tipo === 'acao' ? $('#tApoio').value.trim() : undefined;
+    if (!obj) return;
+    if (!resp) { $('#tErr').textContent = 'Escolha o novo responsável.'; return; }
+    if (!st.nominal(resp)) { $('#tErr').textContent = 'Escolha uma pessoa, não uma empresa ou setor.'; return; }
+    if (resp === obj.resp && (apoio === undefined || apoio === (obj.apoio || ''))) { $('#tErr').textContent = 'Nada mudou: é o mesmo responsável.'; return; }
+    const volta = () => { if (tipo === 'acao') S.drawer = { id: obj.id, modo: null }; else if (tipo === 'comp') S.drawer = { comp: obj.id, modo: null }; else S.modal = null; };
+    grava(async () => { const ant = await st.trocarResponsavel(tipo, obj, resp, apoio); volta(); return ant; },
+      `${obj.id}: responsável agora é ${st.nome(resp)}`,
+      ant => grava(() => st.trocarResponsavel(tipo, obj, ant.resp, tipo === 'acao' ? ant.apoio : undefined), `${obj.id} voltou para ${ant.resp ? st.nome(ant.resp) : 'sem dono'}`));
   }
   if (f.id === 'fCan') {
     const a = st.acao(S.drawer.id), m = $('#cMot').value.trim();
@@ -1152,7 +1240,11 @@ function onInput(e) {
 }
 function onChange(e) {
   const id = e.target.id;
-  if (id === 'selCli') { S.cli = e.target.value; try { localStorage.setItem('gp.cli', S.cli); } catch (x) { /* sem storage */ } S.demOpen.clear(); S.step = 0; if (ROUTES[route()].global) go('visao'); else render(); }
+  if (id === 'selCli' || id === 'fcli') {
+    escolherCliente(e.target.value);
+    if (ROUTES[route()].global) go('visao'); else { render(); if (id === 'fcli') { const f = $('#fcli'); if (f) f.focus(); } }
+  }
+  if (id === 'fsCli') { S.semCli = e.target.value; render(); const f = $('#fsCli'); if (f) f.focus(); }
   if (id === 'fsit') { S.fa.sit = e.target.value; render(); }
   if (id === 'fresp') { S.fa.resp = e.target.value; render(); }
   if (id === 'farea') { S.fa.area = e.target.value; render(); }
