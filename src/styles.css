@@ -319,3 +319,33 @@ body.busy .btn,body.busy [data-q]{pointer-events:none;opacity:.6}
 .nova-dem{display:grid;grid-template-columns:1fr 1fr;gap:12px}
 .nova-dem .full{grid-column:1/-1}
 @media (max-width:560px){.nova-dem{grid-template-columns:1fr}}
+
+
+/* ---- fórum com convocação e pauta (22/10/2026) ---- */
+.fo-cols{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(0,1fr);gap:18px;align-items:start}
+@media (max-width:1000px){.fo-cols{grid-template-columns:1fr}}
+.conv-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:6px 14px}
+.conv-grid .check{font-weight:500}
+.pk{border:1px solid var(--line);border-radius:10px;max-height:min(70vh,620px);overflow:auto;background:var(--surface)}
+.pk-grp{position:sticky;top:0;z-index:1;background:var(--surface-2);padding:6px 12px;border-bottom:1px solid var(--line)}
+.pk-dem{padding:10px 12px;border-bottom:1px solid var(--line);display:flex;flex-direction:column;gap:6px}
+.pk-dem:last-child{border-bottom:0}
+.pk-row{display:flex;gap:10px;align-items:flex-start;cursor:pointer}
+label.pk-row input{margin-top:4px;flex:none;width:16px;height:16px;accent-color:var(--accent)}
+div.pk-row{cursor:default;align-items:center}
+.pk-t{font-weight:600}
+.pk-row .meta{display:flex;flex-wrap:wrap;gap:4px 10px;align-items:center;font-size:.8rem;color:var(--muted);margin-top:2px;font-weight:400}
+.pk-x{align-self:flex-start;margin-left:26px}
+.pk-acs{margin-left:26px;padding-left:10px;border-left:2px solid var(--line);display:flex;flex-direction:column;gap:8px}
+.pauta-ed{list-style:none;margin:0;padding:0;border:1px solid var(--line);border-radius:10px;background:var(--surface)}
+.pauta-ed li{display:grid;grid-template-columns:28px minmax(0,1fr) auto;gap:8px;align-items:start;padding:10px 12px;border-bottom:1px solid var(--line)}
+.pauta-ed li:last-child{border-bottom:0}
+.pauta-ed .meta{display:flex;flex-wrap:wrap;gap:4px 10px;font-size:.8rem;color:var(--muted);margin-top:3px}
+.desd{margin:4px 0 0;padding-left:18px;font-size:.86rem;color:var(--muted);display:flex;flex-direction:column;gap:2px}
+.fo-dl{margin:0 0 12px}
+.modal.wide{width:min(900px,calc(100% - 32px))}
+.qc header h3{flex:1 1 220px;min-width:0}
+details>summary{list-style-position:inside}
+@media (max-width:640px){.pauta-ed li{grid-template-columns:24px minmax(0,1fr)}.pauta-ed li .row-actions{grid-column:2}}
+.w5 dd .sub{display:block;font-size:.8rem;color:var(--muted);margin-top:2px}
+.nota-in{width:100%;min-height:70px;border:1px solid var(--line-strong);border-radius:8px;padding:8px 10px;background:var(--surface);resize:vertical}

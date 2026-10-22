@@ -8,13 +8,13 @@ Endereço: https://guiisobral.github.io/gestao-da-performance/
 
 - **Interface:** este app web (HTML, CSS e JavaScript, sem servidor), publicado no GitHub Pages.
 - **Login:** conta Microsoft da Solve (Entra ID, registro "Gestão da Performance"). Cada pessoa acessa com as próprias permissões.
-- **Base de dados:** as 11 Listas do SharePoint `GP_*` no site Solve Group Base Centralizada, lidas e gravadas pelo Microsoft Graph. O que muda no app aparece na lista, e o contrário também.
+- **Base de dados:** as 12 Listas do SharePoint `GP_*` no site Solve Group Base Centralizada, lidas e gravadas pelo Microsoft Graph. O que muda no app aparece na lista, e o contrário também.
 - **Nenhum dado fica neste repositório.** O código é público; os dados só aparecem depois do login com uma conta da Solve que tenha acesso ao site.
 
 ## Regras gravadas pelo app
 
 - Ação nova só entra com responsável nominal e prazo.
-- Novo prazo exige motivo e fica registrado em `GP_Reprogramacoes`; a partir da 2ª reprogramação, a ação entra na pauta do fórum.
+- Novo prazo exige motivo e fica registrado em `GP_Reprogramacoes`; a partir da 2ª reprogramação, o app avisa para levar a ação ao fórum.
 - Cancelamento exige motivo.
 - Situação da ação, farol, status da demanda e avanço da frente são calculados, nunca digitados.
 - Demanda com todas as ações fechadas fica em "Validar encerramento" até alguém confirmar.
@@ -24,6 +24,24 @@ Endereço: https://guiisobral.github.io/gestao-da-performance/
 - No registro de ação, o campo Demanda oferece **+ Nova demanda**, além da pendência com o mesmo título (padrão) e das demandas existentes. Código da demanda nova pelo tipo: QC, PD ou EF.
 - **Trocar cliente** de ação aberta ou compromisso pendente feito no cliente errado, só sem história (sem reprogramação, sem deliberação, fora da migração; no compromisso, sem série e sem pendência). O código carrega o cliente, então o registro é recriado no cliente certo com código novo e o antigo vai para a lixeira do site (com a pendência criada só para ele). O responsável precisa atender o cliente novo. Tem Desfazer, que recria no cliente original com outro código.
 - Responsável de ação, compromisso ou demanda aberta pode ser trocado (**Trocar** na ação e no compromisso, **Trocar responsável** na demanda). Não pede motivo: o prazo não muda e o histórico de versões da lista guarda quem trocou. Tem **Desfazer** por 6 segundos. No compromisso que se repete, a próxima vez já nasce com o novo responsável.
+
+## Fórum (`GP_Foruns` e `GP_Pauta`)
+
+O fórum nasce de uma convocação e passa por **Agendado → Em andamento → Realizado** (ou **Cancelado**).
+
+- **+ Novo fórum** pede data, horário, local, participantes (qualquer pessoa da Solve e as pessoas nominais do cliente) e a pauta.
+- **Pauta escolhida à mão** numa lista única: cada demanda aberta do cliente (questão crítica, pendência, entrega de frente e outras) com as ações abertas dela embaixo. Pendência é tipo de demanda e aparece uma vez só.
+  - Marcar a demanda inclui as ações dela; as ações que já estavam marcadas sozinhas saem da lista e ficam travadas como "entra pela demanda".
+  - A ação só é marcada sozinha quando a demanda não está na pauta. O mesmo registro não entra duas vezes.
+  - Registro que já está na pauta de outro fórum agendado aparece marcado com a data desse fórum.
+  - **Tópico livre** para assunto que ainda não é registro. Se o texto parece com uma demanda aberta, o app avisa: oferece incluir a demanda ou diz que ela já está na pauta. Tópico com o mesmo texto de outro não entra.
+  - Itens que ficaram **Não tratado** no fórum anterior já entram na pauta do próximo; quem convoca pode tirar.
+- Enquanto agendado: **Editar convocação** e **Cancelar fórum** (com Desfazer).
+- **Iniciar fórum** registra a presença (convocados e quem participou sem ter sido convocado). Um fórum em andamento por cliente.
+- Durante o fórum, cada item tem os botões das ações (Concluir, Novo prazo e o detalhe), **+ Nova ação**, **Deliberação**, **Mantido sem mudança** e **Não tratado**; tópico livre tem anotação. O que é feito no item fica registrado nele (desdobramentos) e define o tratamento: Concluído, Repactuado, Cancelado, Encerrado, Mantido, Tratado ou Não tratado. Desfazer tira o desdobramento.
+- **+ Incluir na pauta** durante o fórum: registro existente, tópico livre ou registro novo criado na reunião.
+- **Encerrar fórum**: item sem tratamento vira Não tratado e vai para a pauta do próximo fórum. A ata sai dos desdobramentos de cada item (presentes, ausentes, pauta com o que foi feito e próximos passos), pode ser editada, copiada para o WhatsApp e salva no SharePoint.
+- Fóruns gravados antes da convocação (sem situação) aparecem como realizados, com a ata que já tinham.
 
 ## Compromissos (`GP_Compromissos`)
 

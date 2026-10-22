@@ -67,7 +67,7 @@ test('duas pessoas criando ação no mesmo cliente recebem códigos diferentes',
   assert.equal(new Set(titulos).size, titulos.length);
 });
 
-test('frente, entrega, demanda, deliberação e reprogramação também não repetem código', async () => {
+test('frente, entrega, demanda, fórum, deliberação e reprogramação também não repetem código', async () => {
   const { be, a, b } = await duasTelas();
   const fr = { cli: 'MOE', area: 'Financeiro', dono: 'SOLVE-PEDRO', fim: '2026-12-31' };
   await a.novaFrente({ ...fr, nome: 'Frente A' });
@@ -75,20 +75,32 @@ test('frente, entrega, demanda, deliberação e reprogramação também não rep
   const base = { cli: 'MOE', resp: 'SOLVE-PEDRO', prazo: '2026-11-01', area: 'Financeiro', origem: 'Captura rápida' };
   await a.novaAcao({ ...base, acao: 'Sem demanda A' });
   await b.novaAcao({ ...base, acao: 'Sem demanda B' });
+  // dois fóruns convocados para o mesmo dia, cada um numa tela
+  const conv = { cli: 'MOE', data: '2026-11-05', hora: '09:30', local: 'Sala 1', convocados: ['SOLVE-PEDRO'], itens: [{ tipo: 'Demanda', reg: 'MOE-PD-01' }] };
+  const fa = await a.convocarForum(conv);
+  const fb = await b.convocarForum({ ...conv, itens: [{ tipo: 'Tópico livre', assunto: 'Informes' }] });
+  assert.notEqual(fa.id, fb.id);
+  await a.iniciarForum(fa, ['SOLVE-PEDRO']);
+  await b.load();
+  a.forumAtivo = fa.id; b.forumAtivo = fa.id;
+  a.alvoPauta = a.pautaDe(fa.id)[0].id; b.alvoPauta = b.pautaDe(fa.id)[0].id;
   await a.registrarDeliberacao({ cli: 'MOE', texto: 'Decisão A', tipo: 'Deliberado' });
   await b.registrarDeliberacao({ cli: 'MOE', texto: 'Decisão B', tipo: 'Deliberado' });
-  for (const l of ['GP_Frentes', 'GP_Demandas', 'GP_Acoes', 'GP_Deliberacoes', 'GP_Foruns']) {
+  for (const l of ['GP_Frentes', 'GP_Demandas', 'GP_Acoes', 'GP_Deliberacoes', 'GP_Foruns', 'GP_Pauta']) {
     const t = be.db[l].map(i => i.fields.Title);
     assert.equal(new Set(t).size, t.length, `${l}: ${t.join(', ')}`);
   }
-  // as duas telas usaram o mesmo fórum do dia
-  assert.equal(be.db.GP_Foruns.length, 1);
+  assert.ok(be.db.GP_Deliberacoes.every(d => d.fields.ForumCodigo === fa.id));
 });
 
-test('ata não sobrescreve a ata que outra pessoa já registrou hoje', async () => {
+test('ata não sobrescreve a ata que outra pessoa já registrou', async () => {
   const { be, a, b } = await duasTelas();
-  await a.salvarAta('MOE', 'Ata do Guilherme', 'Guilherme');
-  await assert.rejects(b.salvarAta('MOE', 'Ata do Pedro', 'Pedro'), e => e.status === 412);
+  const fo = await a.convocarForum({ cli: 'MOE', data: '2026-11-05', hora: '09:30', local: 'Sala 1', convocados: ['SOLVE-PEDRO'], itens: [{ tipo: 'Demanda', reg: 'MOE-PD-01' }] });
+  await a.iniciarForum(fo, ['SOLVE-PEDRO']);
+  await a.encerrarForum(fo);
+  await b.load();
+  await a.salvarAta(fo, 'Ata do Guilherme');
+  await assert.rejects(b.salvarAta(b.forum(fo.id), 'Ata do Pedro'), e => e.status === 412);
   assert.equal(be.db.GP_Foruns[0].fields.Ata, 'Ata do Guilherme');
 });
 

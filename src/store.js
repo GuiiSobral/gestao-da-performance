@@ -10,7 +10,9 @@ export const LISTS = {
   GP_Demandas: ['Title', 'ClienteCodigo', 'Assunto', 'Tipo', 'FrenteCodigo', 'Prioridade', 'ResponsavelCodigo', 'Area', 'PrazoDemanda', 'Encerrada', 'DataEncerramento', 'Origem', 'StatusOrigem', 'NotaMigracao'],
   GP_Acoes: ['Title', 'ClienteCodigo', 'DemandaCodigo', 'OQue', 'Problema', 'Causa', 'ResponsavelCodigo', 'Apoio', 'Area', 'Como', 'Quanto', 'Inicio', 'PrazoOriginal', 'Prazo', 'Status', 'DataConclusao', 'MotivoCancelamento', 'Origem', 'Registro', 'LinhaOrigem', 'ArquivoOrigem', 'StatusOrigem', 'ResponsavelOrigem'],
   GP_Reprogramacoes: ['Title', 'AcaoCodigo', 'ClienteCodigo', 'PrazoAnterior', 'PrazoNovo', 'Motivo', 'RegistradoEm', 'RegistradoPor'],
-  GP_Foruns: ['Title', 'ClienteCodigo', 'Data', 'ConduzidoPor', 'Participantes', 'Ata'],
+  GP_Foruns: ['Title', 'ClienteCodigo', 'Data', 'Hora', 'Local', 'Situacao', 'Convocados', 'Presentes', 'ConduzidoPor', 'Participantes', 'Ata'],
+  GP_Pauta: ['Title', 'ForumCodigo', 'ClienteCodigo', 'Ordem', 'Tipo', 'RegistroCodigo', 'Assunto', 'ResponsavelCodigo', 'Origem', 'ItemAnterior',
+    'Tratamento', 'Desdobramentos', 'Anotacao'],
   GP_Deliberacoes: ['Title', 'ClienteCodigo', 'ForumCodigo', 'Texto', 'Tipo', 'ResponsavelCodigo', 'DemandaCodigo', 'AcaoCodigo', 'Data'],
   GP_Indicadores: ['Title', 'ClienteCodigo', 'Area', 'Nome', 'Formula', 'Unidade', 'Polaridade', 'Frequencia', 'ResponsavelCodigo', 'Situacao'],
   GP_Medicoes: ['Title', 'IndicadorCodigo', 'ClienteCodigo', 'Mes', 'Meta', 'Realizado', 'Comentario'],
@@ -18,7 +20,7 @@ export const LISTS = {
     'Status', 'DataRealizacao', 'Resultado', 'SerieCodigo', 'DemandaCodigo', 'Registro', 'RegistradoPor']
 };
 // Listas que o app tolera não encontrar (o resto do app segue funcionando sem elas).
-const OPCIONAIS = new Set(['GP_Compromissos']);
+const OPCIONAIS = new Set(['GP_Compromissos', 'GP_Pauta']);
 export const TIPOS_COMP = ['Solicitar', 'Entregar', 'Reunião', 'Outro'];
 // Tipos de demanda que a pessoa escolhe ao criar ou editar; os outros (entrega, deliberação, desvio) nascem de outras telas.
 export const TIPOS_DEM = ['Pendência', 'Questão crítica'];
@@ -30,6 +32,11 @@ const EDITAVEL = {
   dem: { lista: 'GP_Demandas', campos: { titulo: 'Assunto', tipo: 'Tipo', area: 'Area', prioridade: 'Prioridade' }, obrig: ['titulo'] }
 };
 export const REPETICOES = ['Única', 'Semanal', 'Mensal'];
+// Fórum: situação, tipos de item da pauta e tratamento de cada item.
+export const SITUACOES_FORUM = ['Agendado', 'Em andamento', 'Realizado', 'Cancelado'];
+export const TOPICO = 'Tópico livre';
+export const TIPOS_ITEM = ['Demanda', 'Ação', TOPICO];
+export const TRATAMENTOS = ['Concluído', 'Repactuado', 'Cancelado', 'Encerrado', 'Mantido', 'Tratado', 'Não tratado'];
 
 // Datas: o SharePoint guarda ao meio-dia UTC para não mudar de dia no fuso de Brasília.
 export const d10 = v => (v ? String(v).slice(0, 10) : null);
@@ -42,6 +49,10 @@ const localDay = iso => (iso ? hojeFrom(new Date(iso)) : null);
 function hojeFrom(d) { return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10); }
 const str = v => (v === null || v === undefined ? '' : String(v));
 const strip = o => Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined && v !== null && v !== ''));
+export const normTxt = s => String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+const PARADAS = new Set('a o e de da do das dos para com sem na no nas nos em por que os as um uma ao aos se sua seu ou'.split(' '));
+const tokens = s => new Set(normTxt(s).split(' ').filter(w => w.length >= 3 && !PARADAS.has(w)).map(w => w.slice(0, 6)));
+const fmtBR = (d, ano) => (d ? `${d.slice(8, 10)}/${d.slice(5, 7)}${ano ? '/' + d.slice(0, 4) : ''}` : 'sem prazo');
 const firstName = s => str(s).trim().split(/\s+/)[0].normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
 
 export class Store {
@@ -49,12 +60,16 @@ export class Store {
     this.be = backend;
     this.user = user || { name: 'Solve', username: '' };
     this.loadedAt = null;
+    this.forumAtivo = null;   // fórum em andamento sendo conduzido na tela: o que muda nele vira desdobramento da pauta
+    this.alvoPauta = null;    // item da pauta de onde a pessoa abriu o registro novo ou a deliberação
+    this.avisos = [];
     this.clear();
   }
 
   clear() {
     this.clientes = []; this.pessoas = []; this.frentes = []; this.demandas = []; this.acoes = [];
     this.reprog = []; this.foruns = []; this.delib = []; this.indicadores = []; this.medicoes = []; this.compromissos = [];
+    this.pauta = [];
   }
 
   async load() {
@@ -101,8 +116,8 @@ export class Store {
       conclusao: d10(f.DataConclusao), motivoCancel: f.MotivoCancelamento || '', origem: f.Origem || '', registro: d10(f.Registro),
       linha: f.LinhaOrigem || null, arquivo: f.ArquivoOrigem || '', statusOriginal: f.StatusOrigem || '', respOriginal: f.ResponsavelOrigem || '',
       modifiedDay: localDay(it.modified), reprogramacoes: rp[f.Title] || [] }; });
-    this.foruns = raw.GP_Foruns.map(it => { const f = F(it); return {
-      itemId: it.id, etag: it.etag, id: f.Title, cli: f.ClienteCodigo, data: d10(f.Data), conduzido: f.ConduzidoPor || '', participantes: f.Participantes || '', ata: f.Ata || '' }; });
+    this.foruns = raw.GP_Foruns.map(it => this.forumDe(it));
+    this.pauta = (raw.GP_Pauta || []).map(it => this.itemPautaDe(it));
     this.delib = raw.GP_Deliberacoes.map(it => { const f = F(it); return {
       itemId: it.id, etag: it.etag, id: f.Title, cli: f.ClienteCodigo, forum: f.ForumCodigo || null, texto: f.Texto || '', tipo: f.Tipo || 'Deliberado',
       resp: f.ResponsavelCodigo || null, demanda: f.DemandaCodigo || null, acaoId: f.AcaoCodigo || null, data: d10(f.Data) }; });
@@ -188,6 +203,7 @@ export class Store {
     const hoje = hojeISO();
     await this.upd('GP_Acoes', a, { Status: 'Concluída', DataConclusao: toSP(hoje) });
     a.status = 'Concluída'; a.conclusao = hoje; a.modifiedDay = hoje;
+    await this.noForum('acao', a, { k: 'concluida', cod: a.id, txt: a.acao, resp: a.resp });
   }
 
   // Desfaz uma conclusão feita por engano (volta ao status anterior e limpa a data).
@@ -195,6 +211,7 @@ export class Store {
     const st = statusAnterior === 'Não iniciada' ? 'Não iniciada' : 'Em andamento';
     await this.upd('GP_Acoes', a, { Status: st, DataConclusao: null });
     a.status = st; a.conclusao = null; a.modifiedDay = hojeISO();
+    await this.tirarDoForum(['concluida'], a.id);
   }
 
   async iniciar(a) {
@@ -205,6 +222,7 @@ export class Store {
   async definirPrazo(a, prazo) {
     await this.upd('GP_Acoes', a, { Prazo: toSP(prazo), PrazoOriginal: toSP(prazo) });
     a.prazo = prazo; a.prazoOriginal = prazo; a.modifiedDay = hojeISO();
+    await this.noForum('acao', a, { k: 'prazo', cod: a.id, txt: a.acao, resp: a.resp, prazo });
   }
 
   async reprogramar(a, prazo, motivo) {
@@ -230,11 +248,13 @@ export class Store {
     this.reprog.push(r);
     a.reprogramacoes = [...a.reprogramacoes, r];
     a.prazo = prazo; a.modifiedDay = hoje;
+    await this.noForum('acao', a, { k: 'repactuada', cod: a.id, txt: a.acao, resp: a.resp, prazo, de: anterior, mot: motivo });
   }
 
   async cancelar(a, motivo) {
     await this.upd('GP_Acoes', a, { Status: 'Cancelada', MotivoCancelamento: motivo });
     a.status = 'Cancelada'; a.motivoCancel = motivo; a.modifiedDay = hojeISO();
+    await this.noForum('acao', a, { k: 'cancelada', cod: a.id, txt: a.acao, mot: motivo });
   }
 
   // Troca o responsável de uma ação, compromisso ou demanda aberta (na ação, também o apoio).
@@ -251,6 +271,7 @@ export class Store {
     obj.resp = resp || null;
     if (comApoio) obj.apoio = apoio || '';
     if (tipo === 'acao') obj.modifiedDay = hojeISO();
+    if (tipo !== 'comp' && (resp || null) !== ant.resp) await this.noForum(tipo, obj, { k: 'resp', cod: obj.id, txt: tipo === 'acao' ? obj.acao : obj.titulo, resp: resp || null, de: ant.resp });
     return ant;
   }
 
@@ -258,6 +279,7 @@ export class Store {
     const hoje = hojeISO();
     await this.upd('GP_Demandas', d, { Encerrada: true, DataEncerramento: toSP(hoje) });
     d.encerrada = true; d.dataEnc = hoje;
+    await this.noForum('dem', d, { k: 'encerrada', cod: d.id, txt: d.titulo });
   }
 
   // Cancela uma demanda sem ação aberta (ex.: questão crítica que deixou de fazer sentido), sem pedir motivo
@@ -268,11 +290,13 @@ export class Store {
     const hoje = hojeISO();
     await this.upd('GP_Demandas', d, { Encerrada: true, DataEncerramento: toSP(hoje) });
     d.encerrada = true; d.dataEnc = hoje;
+    await this.noForum('dem', d, { k: 'cancelDem', cod: d.id, txt: d.titulo });
   }
 
   async reabrirDemanda(d) {
     await this.upd('GP_Demandas', d, { Encerrada: false, DataEncerramento: null });
     d.encerrada = false; d.dataEnc = null;
+    await this.tirarDoForum(['encerrada', 'cancelDem'], d.id);
   }
 
   // Demanda nova criada pela pessoa (ao registrar ou ao mover uma ação). Código pelo tipo: QC, PD ou EF.
@@ -314,6 +338,7 @@ export class Store {
       quanto: null, inicio: hoje, prazoOriginal: prazo, prazo, status: 'Não iniciada', conclusao: null, motivoCancel: '', origem,
       registro: hoje, linha: null, arquivo: '', statusOriginal: '', respOriginal: '', modifiedDay: hoje, reprogramacoes: [] };
     this.acoes.push(a);
+    await this.noForum('acao', a, { k: 'nova', cod: id, txt: acao, resp, prazo });
     return a;
   }
 
@@ -366,6 +391,10 @@ export class Store {
   // destino: código de uma demanda aberta do mesmo cliente, ou { titulo, tipo, frente } para criar uma nova.
   // Se a origem era a pendência criada só para esta ação, ela é cancelada (fica sem ações, então aparece como Cancelada).
   async moverAcao(a, destino) {
+    this._semLog = true;
+    try { return await this._moverAcao(a, destino); } finally { this._semLog = false; }
+  }
+  async _moverAcao(a, destino) {
     const de = this.demanda(a.demanda);
     const soDela = this.pendenciaSoDela(de, a);
     let para, criada = false;
@@ -425,7 +454,11 @@ export class Store {
   }
 
   // dem: código de uma demanda aberta do cliente novo, ou vazio para uma pendência nova com o título da demanda atual.
-  async trocarClienteAcao(a, cli, { resp, dem }) {
+  async trocarClienteAcao(a, cli, args) {
+    this._semLog = true;
+    try { return await this._trocarClienteAcao(a, cli, args); } finally { this._semLog = false; }
+  }
+  async _trocarClienteAcao(a, cli, { resp, dem }) {
     const pode = this.podeTrocarCliente('acao', a);
     if (!pode.ok) throw new Error(pode.motivo);
     if (!this.cliente(cli) || cli === a.cli) throw new Error('Escolha outro cliente');
@@ -515,41 +548,362 @@ export class Store {
     return { frente: fr, entrega: d };
   }
 
-  forumDeHoje(cli) {
-    const hoje = hojeISO();
-    return this.foruns.find(f => f.cli === cli && f.data === hoje) || null;
+  // ---------- fórum: convocação, pauta, condução e ata ----------
+  // O fórum nasce de uma convocação (data, hora, local, convocados e pauta escolhida à mão) e passa por
+  // Agendado → Em andamento → Realizado (ou Cancelado). A ata sai dos desdobramentos de cada item da pauta.
+  forum(id) { return this.foruns.find(f => f.id === id) || null; }
+  forunsDe(cli) {
+    return this.foruns.filter(f => f.cli === cli)
+      .sort((a, b) => (b.data || '').localeCompare(a.data || '') || (b.hora || '').localeCompare(a.hora || '') || b.id.localeCompare(a.id, 'pt', { numeric: true }));
+  }
+  forumEmAndamento(cli) { return this.foruns.find(f => f.cli === cli && f.situacao === 'Em andamento') || null; }
+  pautaDe(forumId) { return this.pauta.filter(p => p.forum === forumId).sort((a, b) => (a.ordem || 0) - (b.ordem || 0) || a.id.localeCompare(b.id, 'pt', { numeric: true })); }
+  itemPauta(id) { return this.pauta.find(p => p.id === id) || null; }
+
+  // Quem pode ser convocado: qualquer pessoa da Solve e as pessoas do cliente (só nominais e ativas).
+  convocaveis(cli) {
+    return this.pessoas.filter(p => p.nominal && p.ativo && p.id !== 'SOLVE' && (p.empresa === 'Solve' || p.cli === cli))
+      .sort((a, b) => (a.empresa === 'Solve') - (b.empresa === 'Solve') || a.nome.localeCompare(b.nome));
   }
 
-  async garantirForum(cli) {
-    const ex = this.forumDeHoje(cli);
-    if (ex) return ex;
-    const hoje = hojeISO();
-    // Outra pessoa pode ter aberto o fórum de hoje depois que esta tela foi carregada: usa o dela.
-    const lidos = await this.be.items('GP_Foruns', ['Title', 'ClienteCodigo', 'Data', 'ConduzidoPor', 'Participantes', 'Ata']);
-    const dele = lidos.find(it => it.fields.ClienteCodigo === cli && d10(it.fields.Data) === hoje);
-    if (dele) {
-      const fo = { itemId: dele.id, etag: dele.etag, id: dele.fields.Title, cli, data: hoje, conduzido: dele.fields.ConduzidoPor || '',
-        participantes: dele.fields.Participantes || '', ata: dele.fields.Ata || '', externo: true };
-      this.foruns.push(fo);
-      return fo;
+  // Título do item como ele está hoje no registro (o texto gravado no item é só a foto do momento da convocação).
+  tituloItem(p) {
+    if (p.tipo === 'Demanda') { const d = this.demanda(p.reg); return d ? d.titulo : (p.assunto || p.reg); }
+    if (p.tipo === 'Ação') { const a = this.acao(p.reg); return a ? a.acao : (p.assunto || p.reg); }
+    return p.assunto;
+  }
+  // O item ainda pede tratamento? (demanda aberta, ação aberta ou tópico livre)
+  itemAberto(p) {
+    if (p.tipo === 'Demanda') { const d = this.demanda(p.reg); return !!d && !d.encerrada; }
+    if (p.tipo === 'Ação') { const a = this.acao(p.reg); return !!a && (a.status === 'Não iniciada' || a.status === 'Em andamento'); }
+    return true;
+  }
+  chaveItem(i) { return i.tipo === TOPICO ? 'T:' + normTxt(i.assunto) : `${i.tipo}:${i.reg}`; }
+
+  // Fórum agendado ou em andamento (fora o informado) que já tem o mesmo registro na pauta.
+  emOutraPauta(cli, tipo, reg, exceto) {
+    const ativos = new Set(this.foruns.filter(f => f.cli === cli && f.id !== exceto && (f.situacao === 'Agendado' || f.situacao === 'Em andamento')).map(f => f.id));
+    const p = this.pauta.find(x => ativos.has(x.forum) && x.tipo === tipo && x.reg === reg);
+    return p ? this.forum(p.forum) : null;
+  }
+
+  // Itens marcados como Não tratado em fóruns realizados que ainda não foram levados a outro fórum (fora os cancelados).
+  naoTratados(cli, exceto) {
+    const vivos = new Set(this.foruns.filter(f => f.cli === cli && f.situacao !== 'Cancelado' && f.id !== exceto).map(f => f.id));
+    const levados = new Set(this.pauta.filter(x => vivos.has(x.forum) && x.anterior).map(x => x.anterior));
+    const real = new Set(this.foruns.filter(f => f.cli === cli && f.situacao === 'Realizado').map(f => f.id));
+    const out = [], vistos = new Set();
+    const itens = this.pauta.filter(p => real.has(p.forum) && p.trat === 'Não tratado' && !levados.has(p.id) && this.itemAberto(p))
+      .sort((a, b) => (this.forum(b.forum).data || '').localeCompare(this.forum(a.forum).data || ''));
+    for (const p of itens) {
+      const k = this.chaveItem(p);
+      if (vistos.has(k)) continue;
+      vistos.add(k); out.push(p);
     }
-    const base = `${cli}-FO-${hoje.replace(/-/g, '')}`;
-    const f = { ClienteCodigo: cli, Data: toSP(hoje), ConduzidoPor: this.user.name || '' };
+    return out.reverse();
+  }
+
+  // Tira repetições da pauta: o mesmo registro duas vezes, a ação cuja demanda inteira já está na pauta
+  // e o tópico livre com o mesmo texto de outro.
+  normalizarPauta(itens) {
+    const demSel = new Set(itens.filter(i => i.tipo === 'Demanda').map(i => i.reg));
+    const vistos = new Set(), out = [], absorvidas = [];
+    for (const i of itens) {
+      if (i.tipo === TOPICO && !String(i.assunto || '').trim()) continue;
+      const k = this.chaveItem(i);
+      if (vistos.has(k)) continue;
+      if (i.tipo === 'Ação') { const a = this.acao(i.reg); if (a && demSel.has(a.demanda)) { absorvidas.push(i.reg); continue; } }
+      vistos.add(k); out.push(i);
+    }
+    return { itens: out, absorvidas };
+  }
+
+  // Demandas abertas do cliente com título parecido com o texto (para não criar tópico livre que já é registro).
+  parecidas(cli, texto) {
+    const A = tokens(texto);
+    if (!A.size) return [];
+    return this.demandas.filter(d => d.cli === cli && !d.encerrada).map(d => {
+      const B = tokens(d.titulo);
+      const i = [...A].filter(t => B.has(t)).length;
+      const s = !B.size ? 0 : normTxt(d.titulo) === normTxt(texto) ? 2 : i >= Math.min(2, A.size, B.size) ? i / Math.min(A.size, B.size) : 0;
+      return { d, s };
+    }).filter(x => x.s >= 0.6).sort((a, b) => b.s - a.s).slice(0, 3).map(x => x.d);
+  }
+
+  validarConvocacao({ data, hora, local, convocados, itens }) {
+    if (!data) throw new Error('Informe a data do fórum');
+    if (!/^\d{2}:\d{2}$/.test(hora || '')) throw new Error('Informe o horário do fórum');
+    if (!String(local || '').trim()) throw new Error('Informe o local do fórum');
+    if (!convocados || !convocados.length) throw new Error('Escolha pelo menos um participante');
+    if (!itens || !itens.length) throw new Error('Escolha pelo menos um item para a pauta');
+  }
+
+  // Cria os itens da pauta em ordem. Lê os códigos já usados uma vez só e numera em sequência.
+  async criarItens(fo, itens, ordem0, origemPadrao) {
+    const usados = new Set(this.pauta.map(x => x.id));
+    for (const t of await this.be.titulos('GP_Pauta')) usados.add(t);
+    const criados = [];
+    let ordem = ordem0;
+    try {
+      for (const i of itens) {
+        const code = this.proximo(usados, `${fo.id}-P`, 2);
+        usados.add(code);
+        ordem++;
+        const assunto = (i.tipo === TOPICO ? String(i.assunto || '').trim() : (i.tipo === 'Demanda' ? (this.demanda(i.reg) || {}).titulo : (this.acao(i.reg) || {}).acao) || i.assunto || '').slice(0, 255);
+        const f = { Title: code, ForumCodigo: fo.id, ClienteCodigo: fo.cli, Ordem: ordem, Tipo: i.tipo, RegistroCodigo: i.tipo === TOPICO ? undefined : i.reg,
+          Assunto: assunto, ResponsavelCodigo: i.resp || undefined, Origem: i.origem || origemPadrao, ItemAnterior: i.anterior || undefined };
+        const it = await this.be.create('GP_Pauta', strip(f));
+        const p = this.itemPautaDe({ id: it.id, etag: it.etag, fields: f });
+        this.pauta.push(p); criados.push(p);
+      }
+    } catch (e) {
+      for (const p of criados) { try { await this.be.remove('GP_Pauta', p.itemId); } catch (x) { /* a releitura mostra */ } }
+      this.pauta = this.pauta.filter(x => !criados.includes(x));
+      throw e;
+    }
+    return criados;
+  }
+
+  itemPautaDe(it) {
+    const f = it.fields || {};
+    let ev = [];
+    try { ev = f.Desdobramentos ? JSON.parse(f.Desdobramentos) : []; } catch (e) { ev = []; }
+    return { itemId: it.id, etag: it.etag, id: f.Title, forum: f.ForumCodigo, cli: f.ClienteCodigo, ordem: Number(f.Ordem) || 0, tipo: f.Tipo || TOPICO,
+      reg: f.RegistroCodigo || null, assunto: f.Assunto || '', resp: f.ResponsavelCodigo || null, origem: f.Origem || 'Convocação', anterior: f.ItemAnterior || null,
+      trat: f.Tratamento || null, eventos: Array.isArray(ev) ? ev : [], nota: f.Anotacao || '' };
+  }
+
+  async convocarForum({ cli, data, hora, local, convocados, itens }) {
+    this.validarConvocacao({ data, hora, local, convocados, itens });
+    const { itens: pauta } = this.normalizarPauta(itens);
+    const base = `${cli}-FO-${data.replace(/-/g, '')}`;
+    const f = { ClienteCodigo: cli, Data: toSP(data), Hora: hora, Local: String(local).trim().slice(0, 255), Situacao: 'Agendado',
+      Convocados: convocados.join('; '), ConduzidoPor: this.user.name || '' };
     const { it, code } = await this.criar('GP_Foruns', this.foruns, usados => {
       let c = base, n = 2;
       while (usados.has(c)) c = `${base}-${n++}`;
       return c;
     }, c => ({ Title: c, ...f }));
-    const fo = { itemId: it.id, etag: it.etag, id: code, cli, data: hoje, conduzido: f.ConduzidoPor, participantes: '', ata: '' };
+    const fo = this.forumDe({ id: it.id, etag: it.etag, fields: { Title: code, ...f } });
     this.foruns.push(fo);
+    try {
+      await this.criarItens(fo, pauta, 0, 'Convocação');
+    } catch (e) {
+      try { await this.be.remove('GP_Foruns', fo.itemId); } catch (x) { /* a releitura mostra */ }
+      this.foruns = this.foruns.filter(x => x !== fo);
+      throw e;
+    }
     return fo;
   }
 
+  forumDe(it) {
+    const f = it.fields || {};
+    const lista = v => String(v || '').split(';').map(s => s.trim()).filter(Boolean);
+    return { itemId: it.id, etag: it.etag, id: f.Title, cli: f.ClienteCodigo, data: d10(f.Data), hora: f.Hora || '', local: f.Local || '',
+      // Fórum anterior à convocação (sem situação gravada): já aconteceu.
+      situacao: f.Situacao || 'Realizado', antigo: !f.Situacao, conduzido: f.ConduzidoPor || '', convocados: lista(f.Convocados), presentes: lista(f.Presentes),
+      participantes: f.Participantes || '', ata: f.Ata || '' };
+  }
+
+  // Só enquanto agendado: muda data, hora, local, convocados e pauta (itens novos entram, retirados vão para a lixeira).
+  async editarConvocacao(fo, { data, hora, local, convocados, itens }) {
+    if (fo.situacao !== 'Agendado') throw new Error('Só dá para editar a convocação de um fórum agendado');
+    this.validarConvocacao({ data, hora, local, convocados, itens });
+    const { itens: pauta } = this.normalizarPauta(itens);
+    const f = { Data: toSP(data), Hora: hora, Local: String(local).trim().slice(0, 255), Convocados: convocados.join('; ') };
+    await this.upd('GP_Foruns', fo, f);
+    Object.assign(fo, { data, hora, local: f.Local, convocados: [...convocados] });
+    const atuais = this.pautaDe(fo.id);
+    const porChave = new Map(atuais.map(p => [this.chaveItem(p), p]));
+    const manter = new Set();
+    const novos = [];
+    pauta.forEach((i, k) => { const p = porChave.get(this.chaveItem(i)); if (p) { manter.add(p); p._ordem = k + 1; } else novos.push({ i, ordem: k + 1 }); });
+    for (const p of atuais.filter(x => !manter.has(x))) {
+      await this.be.remove('GP_Pauta', p.itemId);
+      this.pauta = this.pauta.filter(x => x !== p);
+    }
+    for (const p of manter) {
+      if (p.ordem !== p._ordem) { await this.upd('GP_Pauta', p, { Ordem: p._ordem }); p.ordem = p._ordem; }
+      delete p._ordem;
+    }
+    for (const { i, ordem } of novos) {
+      const [p] = await this.criarItens(fo, [i], ordem - 1, 'Convocação');
+      if (p.ordem !== ordem) { await this.upd('GP_Pauta', p, { Ordem: ordem }); p.ordem = ordem; }
+    }
+    return fo;
+  }
+
+  async cancelarForum(fo) {
+    if (fo.situacao !== 'Agendado') throw new Error('Só dá para cancelar um fórum agendado');
+    await this.upd('GP_Foruns', fo, { Situacao: 'Cancelado' });
+    fo.situacao = 'Cancelado';
+  }
+  async reagendarForum(fo) {
+    await this.upd('GP_Foruns', fo, { Situacao: 'Agendado' });
+    fo.situacao = 'Agendado';
+  }
+
+  async iniciarForum(fo, presentes) {
+    if (fo.situacao !== 'Agendado') throw new Error('Este fórum não está agendado');
+    if (!presentes || !presentes.length) throw new Error('Marque quem está presente');
+    const outro = this.forumEmAndamento(fo.cli);
+    if (outro) throw new Error(`O fórum ${outro.id} deste cliente ainda está em andamento: encerre-o antes`);
+    await this.upd('GP_Foruns', fo, { Situacao: 'Em andamento', Presentes: presentes.join('; ') });
+    fo.situacao = 'Em andamento'; fo.presentes = [...presentes];
+  }
+
+  async atualizarPresentes(fo, presentes) {
+    if (!presentes || !presentes.length) throw new Error('Marque quem está presente');
+    await this.upd('GP_Foruns', fo, { Presentes: presentes.join('; ') });
+    fo.presentes = [...presentes];
+  }
+
+  // Encerra: item sem tratamento vira "Não tratado" e vai para a pauta do próximo fórum do cliente.
+  async encerrarForum(fo) {
+    if (fo.situacao !== 'Em andamento') throw new Error('Este fórum não está em andamento');
+    for (const p of this.pautaDe(fo.id).filter(x => !x.trat)) {
+      await this.upd('GP_Pauta', p, { Tratamento: 'Não tratado' });
+      p.trat = 'Não tratado';
+    }
+    await this.upd('GP_Foruns', fo, { Situacao: 'Realizado' });
+    fo.situacao = 'Realizado';
+    if (this.forumAtivo === fo.id) this.forumAtivo = null;
+  }
+
+  async salvarAta(fo, texto) {
+    if (fo.situacao !== 'Realizado') throw new Error('A ata é salva depois de encerrar o fórum');
+    await this.upd('GP_Foruns', fo, { Ata: texto });
+    fo.ata = texto;
+    return fo;
+  }
+
+  // Durante o fórum: inclui um registro existente, um tópico livre ou o registro novo criado na reunião.
+  async incluirNaPauta(fo, item, origem = 'Incluído no fórum') {
+    if (fo.situacao !== 'Em andamento') throw new Error('Só dá para incluir na pauta com o fórum em andamento');
+    const atuais = this.pautaDe(fo.id);
+    if (atuais.some(p => this.chaveItem(p) === this.chaveItem(item))) throw new Error('Este item já está na pauta');
+    if (item.tipo === 'Ação') {
+      const a = this.acao(item.reg);
+      const dem = a && atuais.find(p => p.tipo === 'Demanda' && p.reg === a.demanda);
+      if (dem) throw new Error(`A demanda desta ação já está na pauta (item ${dem.ordem})`);
+    }
+    const max = atuais.reduce((m, p) => Math.max(m, p.ordem || 0), 0);
+    const [p] = await this.criarItens(fo, [{ ...item, origem }], max, origem);
+    return p;
+  }
+
+  async marcarTratamento(p, trat) {
+    if (!TRATAMENTOS.includes(trat)) throw new Error('Tratamento inválido');
+    const ant = p.trat;
+    await this.upd('GP_Pauta', p, { Tratamento: trat });
+    p.trat = trat;
+    return ant;
+  }
+  async desmarcarTratamento(p, ant) {
+    await this.upd('GP_Pauta', p, { Tratamento: ant || null });
+    p.trat = ant || null;
+  }
+
+  async salvarAnotacao(p, texto) {
+    const t = String(texto || '').trim().slice(0, 4000);
+    const f = { Anotacao: t || null };
+    if (t && p.tipo === TOPICO && !p.trat) f.Tratamento = 'Tratado';
+    await this.upd('GP_Pauta', p, f);
+    p.nota = t;
+    if (f.Tratamento) p.trat = f.Tratamento;
+  }
+
+  // ---------- desdobramentos: o que foi feito em cada item durante o fórum em andamento ----------
+  // A tela do fórum marca qual fórum está sendo conduzido (forumAtivo) e, quando a pessoa cria algo a partir de
+  // um item, qual é esse item (alvoPauta). Fora do fórum nada disso é registrado.
+  itemAlvo(kind, obj) {
+    if (!this.forumAtivo) return null;
+    const itens = this.pautaDe(this.forumAtivo);
+    if (this.alvoPauta) { const p = itens.find(x => x.id === this.alvoPauta); if (p) return p; }
+    if (kind === 'acao') return itens.find(p => p.tipo === 'Ação' && p.reg === obj.id) || itens.find(p => p.tipo === 'Demanda' && p.reg === obj.demanda) || null;
+    if (kind === 'dem') return itens.find(p => p.tipo === 'Demanda' && p.reg === obj.id) || null;
+    return null;
+  }
+
+  tratamentoAuto(p) {
+    const ev = p.eventos;
+    if (!ev.length) return null;
+    if (p.tipo === 'Ação') {
+      const k = [...ev].reverse().find(e => ['concluida', 'repactuada', 'prazo', 'cancelada'].includes(e.k));
+      return k ? { concluida: 'Concluído', repactuada: 'Repactuado', prazo: 'Repactuado', cancelada: 'Cancelado' }[k.k] : 'Tratado';
+    }
+    if (p.tipo === 'Demanda') {
+      const fim = [...ev].reverse().find(e => e.k === 'encerrada' || e.k === 'cancelDem');
+      if (fim) return fim.k === 'encerrada' ? 'Encerrado' : 'Cancelado';
+      return 'Tratado';
+    }
+    return 'Tratado';
+  }
+
+  async gravarEventos(p, eventos) {
+    const antes = p.eventos;
+    p.eventos = eventos;
+    const auto = this.tratamentoAuto(p);
+    // Sem nenhum desdobramento, o item volta para "a tratar" (a não ser que a pessoa tenha marcado à mão).
+    const trat = auto || (['Mantido', 'Não tratado'].includes(p.trat) || (p.tipo === TOPICO && p.nota) ? p.trat : null);
+    try {
+      await this.upd('GP_Pauta', p, { Desdobramentos: eventos.length ? JSON.stringify(eventos) : null, Tratamento: trat });
+    } catch (e) { p.eventos = antes; throw e; }
+    p.trat = trat;
+  }
+
+  // Registra o desdobramento no item da pauta. Não derruba a gravação principal: se falhar, avisa.
+  async noForum(kind, obj, ev) {
+    if (!this.forumAtivo || this._semLog) return;
+    try {
+      const fo = this.forum(this.forumAtivo);
+      if (!fo || (obj.cli && obj.cli !== fo.cli)) return;
+      let p = this.itemAlvo(kind, obj);
+      if (!p) {
+        if (!fo || fo.situacao !== 'Em andamento' || fo.cli !== obj.cli) return;
+        p = await this.incluirNaPauta(fo, kind === 'dem' ? { tipo: 'Demanda', reg: obj.id } : { tipo: 'Ação', reg: obj.id });
+      }
+      let lista = [...p.eventos];
+      // Trocar o responsável e depois voltar ao anterior não deixa rastro na ata.
+      if (ev.k === 'resp') {
+        const i = lista.map(e => e.k === 'resp' && e.cod === ev.cod).lastIndexOf(true);
+        if (i >= 0 && lista[i].de === ev.resp) { lista.splice(i, 1); return await this.gravarEventos(p, lista); }
+      }
+      lista.push({ ...ev, em: new Date().toISOString() });
+      await this.gravarEventos(p, lista);
+    } catch (e) {
+      console.error(e);
+      this.avisos.push(`Gravei no registro, mas não consegui anotar na pauta do fórum: ${e.message || e}`);
+    }
+  }
+
+  // Desfazer: tira da pauta o último desdobramento daquele tipo para aquele registro.
+  async tirarDoForum(kinds, cod) {
+    if (!this.forumAtivo) return;
+    try {
+      for (const p of this.pautaDe(this.forumAtivo)) {
+        const i = p.eventos.map(e => kinds.includes(e.k) && e.cod === cod).lastIndexOf(true);
+        if (i < 0) continue;
+        const lista = [...p.eventos]; lista.splice(i, 1);
+        await this.gravarEventos(p, lista);
+        return;
+      }
+    } catch (e) {
+      console.error(e);
+      this.avisos.push(`Desfiz no registro, mas não consegui tirar da pauta do fórum: ${e.message || e}`);
+    }
+  }
+
+  // Deliberação do fórum em andamento, sempre ligada a um item da pauta (alvoPauta).
   async registrarDeliberacao({ cli, texto, tipo, resp, dem, prazo, gera, area }) {
-    const fo = await this.garantirForum(cli);
+    const fo = this.forumAtivo ? this.forum(this.forumAtivo) : null;
+    if (!fo || fo.situacao !== 'Em andamento' || fo.cli !== cli) throw new Error('A deliberação é registrada com o fórum em andamento');
     let acao = null;
-    if (gera) acao = await this.novaAcao({ cli, acao: texto, porque: 'Deliberação do fórum', dem, resp, prazo,
-      area: area || (dem && this.demanda(dem) && this.demanda(dem).area) || 'Controladoria', origem: 'Deliberação do fórum' });
+    this._semLog = true;
+    try {
+      if (gera) acao = await this.novaAcao({ cli, acao: texto, porque: 'Deliberação do fórum', dem, resp, prazo,
+        area: area || (dem && this.demanda(dem) && this.demanda(dem).area) || 'Controladoria', origem: 'Deliberação do fórum' });
+    } finally { this._semLog = false; }
     const hoje = hojeISO();
     const demanda = dem || (acao && acao.demanda) || null;
     const f = { ClienteCodigo: cli, ForumCodigo: fo.id, Texto: texto, Tipo: tipo, ResponsavelCodigo: resp || undefined,
@@ -557,18 +911,59 @@ export class Store {
     const { it, code } = await this.criar('GP_Deliberacoes', this.delib, u => this.proximo(u, `${cli}-DL-`, 2), c => ({ Title: c, ...f }));
     const x = { itemId: it.id, etag: it.etag, id: code, cli, forum: fo.id, texto, tipo, resp: resp || null, demanda, acaoId: acao ? acao.id : null, data: hoje };
     this.delib.push(x);
+    const alvo = this.alvoPauta ? this.itemPauta(this.alvoPauta) : null;
+    if (alvo) await this.noForum('delib', { cli, id: code }, { k: 'delib', dl: code, cod: acao ? acao.id : null, txt: texto, tipo, resp: resp || null, prazo: gera ? prazo : null });
     return x;
   }
 
-  async salvarAta(cli, texto, participantes) {
-    const fo = await this.garantirForum(cli);
-    if (fo.externo && fo.ata && fo.ata !== texto)
-      throw Object.assign(new Error('Outra pessoa já registrou a ata do fórum de hoje deste cliente'), { status: 412 });
-    await this.upd('GP_Foruns', fo, strip({ Ata: texto, Participantes: participantes }));
-    fo.externo = false;
-    fo.ata = texto;
-    if (participantes) fo.participantes = participantes;
-    return fo;
+  // ---------- ata ----------
+  linhaEvento(e) {
+    const q = e.resp ? ` (${this.nome(e.resp)})` : '';
+    switch (e.k) {
+      case 'concluida': return `Concluída: ${e.txt}${q}`;
+      case 'repactuada': return `Novo prazo ${fmtBR(e.prazo)}${e.de ? ` (era ${fmtBR(e.de)})` : ''}: ${e.txt}${q}. Motivo: ${e.mot}`;
+      case 'prazo': return `Prazo definido para ${fmtBR(e.prazo)}: ${e.txt}${q}`;
+      case 'cancelada': return `Cancelada: ${e.txt}. Motivo: ${e.mot}`;
+      case 'resp': return `Responsável passa a ser ${this.nome(e.resp)}: ${e.txt}`;
+      case 'nova': return `Nova ação: ${e.txt} (${this.nome(e.resp)}, até ${fmtBR(e.prazo)})`;
+      case 'encerrada': return 'Demanda encerrada';
+      case 'cancelDem': return 'Demanda cancelada';
+      case 'delib': return `${e.tipo || 'Deliberado'}: ${e.txt}${e.cod ? ` (ação ${e.cod}: ${this.nome(e.resp)}, até ${fmtBR(e.prazo)})` : q}`;
+      default: return e.txt || '';
+    }
+  }
+
+  ataDoForum(fo) {
+    const cli = this.cliente(fo.cli);
+    const L = [];
+    L.push(`*Fórum de Gestão | ${cli ? cli.nome : fo.cli} | ${fmtBR(fo.data, true)}${fo.hora ? ' às ' + fo.hora : ''}*`);
+    if (fo.local) L.push(`Local: ${fo.local}`);
+    const pres = fo.presentes.map(c => this.nome(c));
+    const aus = fo.convocados.filter(c => !fo.presentes.includes(c)).map(c => this.nome(c));
+    if (pres.length) L.push(`Presentes: ${pres.join(', ')}`);
+    if (aus.length) L.push(`Ausentes: ${aus.join(', ')}`);
+    L.push('', '*Pauta*');
+    const itens = this.pautaDe(fo.id);
+    itens.forEach((p, k) => {
+      const trat = p.trat === 'Não tratado' ? 'Não tratado, volta na próxima pauta' : (p.trat || 'Sem tratamento');
+      L.push(`${k + 1}. ${this.tituloItem(p)} | ${trat}`);
+      p.eventos.forEach(e => L.push(`   • ${this.linhaEvento(e)}`));
+      if (p.nota) L.push(`   • ${p.nota.replace(/\n+/g, ' ')}`);
+    });
+    // Próximos passos: as ações criadas, repactuadas ou com novo responsável neste fórum que seguem abertas.
+    const vistos = new Set(), passos = [];
+    for (const p of itens) for (const e of p.eventos) {
+      if (!['nova', 'repactuada', 'prazo', 'resp', 'delib'].includes(e.k) || !e.cod || vistos.has(e.cod)) continue;
+      const a = this.acao(e.cod);
+      if (!a || !(a.status === 'Não iniciada' || a.status === 'Em andamento')) continue;
+      vistos.add(e.cod); passos.push(a);
+    }
+    if (passos.length) {
+      L.push('', '*Próximos passos*');
+      passos.sort((a, b) => (a.prazo || '9999').localeCompare(b.prazo || '9999'))
+        .forEach(a => L.push(`• ${a.acao} | *${this.nome(a.resp)}* | até ${fmtBR(a.prazo)}`));
+    }
+    return L.join('\n');
   }
 
   // ---------- compromissos (um passo só, com data; fora dos números de ações) ----------
