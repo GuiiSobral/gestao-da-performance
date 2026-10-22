@@ -18,6 +18,7 @@ Endereço: https://guiisobral.github.io/gestao-da-performance/
 - Cancelamento exige motivo.
 - Situação da ação, farol, status da demanda e avanço da frente são calculados, nunca digitados.
 - Demanda com todas as ações fechadas fica em "Validar encerramento" até alguém confirmar.
+- Demanda sem nenhuma ação aberta e sem plano pode ser cancelada direto (**Cancelar demanda** na demanda, **Cancelar questão** no Fórum). O motivo é obrigatório e fica gravado na coluna MotivoCancelamento de GP_Demandas; nenhuma ação é criada. Tem **Desfazer** por 6 segundos; criar uma ação nela depois a reabre e limpa o cancelamento.
 - Responsável de ação, compromisso ou demanda aberta pode ser trocado (**Trocar** na ação e no compromisso, **Trocar responsável** na demanda). Não pede motivo: o prazo não muda e o histórico de versões da lista guarda quem trocou. Tem **Desfazer** por 6 segundos. No compromisso que se repete, a próxima vez já nasce com o novo responsável.
 
 ## Compromissos (`GP_Compromissos`)

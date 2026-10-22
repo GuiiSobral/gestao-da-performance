@@ -93,7 +93,7 @@ function infoDem(d) {
   const v7 = ab.filter(a => a.prazo && a.prazo >= HOJE && a.prazo <= LIM7).length;
   const conc = ac.filter(a => a.status === 'Concluída').length;
   let status;
-  if (d.encerrada) status = ac.length && ac.every(a => a.status === 'Cancelada') ? 'Cancelada' : 'Concluída';
+  if (d.encerrada) status = d.motivoCancel || (ac.length && ac.every(a => a.status === 'Cancelada')) ? 'Cancelada' : 'Concluída';
   else if (ab.length) status = 'Em andamento';
   else if (ac.length) status = 'Validar encerramento';
   else status = 'Sem plano de ação';
@@ -431,10 +431,12 @@ function demRow(d, i, comCli) {
     </button>
     ${open ? `<div class="open">
       ${notas.length ? `<div class="note"><b>O que a migração encontrou</b><ul>${notas.map(x => `<li>${esc(x)}</li>`).join('')}</ul></div>` : ''}
-      <div class="small muted"><span class="mono">${esc(d.id)}</span>${d.origem ? ' · origem: ' + esc(d.origem) : ''}${d.prazo ? ` · prazo da demanda: ${fmt(d.prazo)}` : ''}${d.encerrada && d.dataEnc ? ` · encerrada em ${fmtF(d.dataEnc)}` : ''}</div>
+      <div class="small muted"><span class="mono">${esc(d.id)}</span>${d.origem ? ' · origem: ' + esc(d.origem) : ''}${d.prazo ? ` · prazo da demanda: ${fmt(d.prazo)}` : ''}${d.encerrada && d.dataEnc ? ` · ${d.motivoCancel ? 'cancelada' : 'encerrada'} em ${fmtF(d.dataEnc)}` : ''}</div>
+      ${d.encerrada && d.motivoCancel ? `<div class="small"><b>Motivo do cancelamento:</b> ${esc(d.motivoCancel)}</div>` : ''}
       ${i.ac.length ? `<div style="overflow-x:auto"><table class="mini"><tbody>${sortAcoes(i.ac).map(a => `<tr data-acao="${esc(a.id)}"><td class="c-id">${esc(a.id)}</td><td><button class="linkbtn plain" data-acao="${esc(a.id)}">${esc(a.acao)}</button></td><td class="c-nw">${esc(st.nome(a.resp) || '—')}</td><td class="c-nw">${pill(situacao(a))}</td></tr>`).join('')}</tbody></table></div>` : ''}
       <div class="row-actions">${i.aberta ? `<button class="btn sm" data-do="capturar" data-dem-pre="${esc(d.id)}">+ ${i.ac.length ? 'Nova ação nesta demanda' : 'Criar a primeira ação'}</button><button class="btn sm" data-do="respDem" data-id="${esc(d.id)}">Trocar responsável</button>` : ''}
-        ${i.validar ? `<button class="btn sm primary" data-do="encerrarDem" data-id="${esc(d.id)}">Confirmar encerramento</button>` : ''}</div>
+        ${i.validar ? `<button class="btn sm primary" data-do="encerrarDem" data-id="${esc(d.id)}">Confirmar encerramento</button>` : ''}
+        ${i.status === 'Sem plano de ação' ? `<button class="btn sm danger ghost" data-do="cancDem" data-id="${esc(d.id)}">Cancelar demanda</button>` : ''}</div>
     </div>` : ''}
   </div>`;
 }
@@ -569,7 +571,7 @@ function renderForum() {
     const qcs = demandasC(S.cli).filter(d => d.tipo === 'Questão crítica').map(d => ({ d, i: infoDem(d) })).filter(x => x.i.aberta)
       .sort((a, b) => (a.d.prioridade || 99) - (b.d.prioridade || 99) || SEV[a.i.farol] - SEV[b.i.farol]);
     body = `${qcs.length ? qcs.map(({ d, i }) => `<div class="qc"><header>${dot(i.farol, FAROL[i.farol])}${d.prioridade ? `<span class="prio">P${d.prioridade}</span>` : ''}<h3>${esc(d.titulo)}</h3><span class="small muted">${d.resp ? esc(st.nome(d.resp)) : 'sem dono nominal'}</span>${i.validar ? '<span class="pill acc">validar encerramento</span>' : ''}</header>
-      ${i.ab.length ? quickTable(sortAcoes(i.ab)) : i.validar ? `<div class="row-actions"><span class="small">Todas as ações foram concluídas. Se o fórum confirmar, a questão sai da pauta.</span><button class="btn sm primary" data-do="encerrarDem" data-id="${esc(d.id)}">Confirmar encerramento</button></div>` : `<div class="row-actions"><span class="pill bad">Sem plano de ação</span><button class="btn sm" data-do="capturar" data-dem-pre="${esc(d.id)}">+ Criar ação</button></div>`}</div>`).join('') : '<div class="empty">Nenhuma questão crítica aberta.</div>'}
+      ${i.ab.length ? quickTable(sortAcoes(i.ab)) : i.validar ? `<div class="row-actions"><span class="small">Todas as ações foram concluídas. Se o fórum confirmar, a questão sai da pauta.</span><button class="btn sm primary" data-do="encerrarDem" data-id="${esc(d.id)}">Confirmar encerramento</button></div>` : `<div class="row-actions"><span class="pill bad">Sem plano de ação</span><button class="btn sm" data-do="capturar" data-dem-pre="${esc(d.id)}">+ Criar ação</button><button class="btn sm danger ghost" data-do="cancDem" data-id="${esc(d.id)}">Cancelar questão</button></div>`}</div>`).join('') : '<div class="empty">Nenhuma questão crítica aberta.</div>'}
       <div><button class="btn primary" data-step="3">Seguir para deliberações</button></div>`;
   } else if (step === 3) {
     const pes = st.pessoasPara(S.cli);
@@ -960,8 +962,22 @@ function respDemModalHtml() {
     <p class="small muted" style="margin:0">As ações da demanda continuam com os responsáveis delas. Para trocar o de uma ação, abra a ação.</p>
   </div>`;
 }
+function cancDemModalHtml() {
+  const d = st.demanda(S.modal.dem);
+  if (!d) return '';
+  return `<div class="modal" role="dialog" aria-modal="true" aria-labelledby="mT">
+    ${cabModal('Cancelar demanda')}
+    <p class="small muted" style="margin:0"><span class="mono">${esc(d.id)}</span> · ${esc(d.tipo)} · ${esc(d.titulo)}</p>
+    <form id="fCanD" class="form">
+      <div class="field full"><label for="cdMot">Por que cancelar?</label><input type="text" id="cdMot" required maxlength="255" placeholder="Ex.: deixou de ser prioridade do cliente; tratada na frente X"></div>
+      <div class="full row-actions"><button class="btn danger" type="submit">Cancelar demanda</button><button class="btn" type="button" data-do="fechar">Voltar</button><span class="small err-text" id="cdErr" role="alert"></span></div>
+    </form>
+    <p class="small muted" style="margin:0">A demanda sai da gestão como Cancelada, com o motivo gravado. Nenhuma ação é criada. Dá para desfazer em 6 segundos; depois disso, criar uma ação nela a reabre.</p>
+  </div>`;
+}
 function modalHtml() {
   if (S.modal.kind === 'respDem') return respDemModalHtml();
+  if (S.modal.kind === 'cancDem') return cancDemModalHtml();
   if (S.modal.kind === 'comp') return compModalHtml();
   if (S.modal.kind === 'frente') return frenteModalHtml();
   if (S.modal.kind === 'entrega') return entregaModalHtml();
@@ -1089,6 +1105,7 @@ function onClick(e) {
     case 'fechar': fechar(); break;
     case 'modo': S.drawer.modo = ds.m || null; renderLayer(); { const i = $(ds.m === 'cancel' ? '#cMot' : ds.m === 'remarcar' ? '#rcData' : ds.m === 'resp' ? '#tResp' : ds.m ? '#rPrazo' : '#dwT'); if (i) i.focus(); } break;
     case 'respDem': S.drawer = null; S.modal = { kind: 'respDem', dem: ds.id }; renderLayer(); { const i = $('#tResp'); if (i) i.focus(); } break;
+    case 'cancDem': S.drawer = null; S.modal = { kind: 'cancDem', dem: ds.id }; renderLayer(); { const i = $('#cdMot'); if (i) i.focus(); } break;
     case 'novoComp': {
       const r = ROUTES[route()];
       S.drawer = null; S.modal = { kind: 'comp', cli: (r.global ? S.fc.cli : '') || S.cli }; renderLayer(); { const i = $('#cOque'); if (i) i.focus(); } break;
@@ -1153,6 +1170,13 @@ function onSubmit(e) {
     grava(async () => { const ant = await st.trocarResponsavel(tipo, obj, resp, apoio); volta(); return ant; },
       `${obj.id}: responsável agora é ${st.nome(resp)}`,
       ant => grava(() => st.trocarResponsavel(tipo, obj, ant.resp, tipo === 'acao' ? ant.apoio : undefined), `${obj.id} voltou para ${ant.resp ? st.nome(ant.resp) : 'sem dono'}`));
+  }
+  if (f.id === 'fCanD') {
+    const d = st.demanda(S.modal.dem), m = $('#cdMot').value.trim();
+    if (!d) return;
+    if (!m) { $('#cdErr').textContent = 'Informe o motivo: sem motivo, a demanda não é cancelada.'; return; }
+    grava(async () => { await st.cancelarDemanda(d, m); S.modal = null; }, `${d.id} cancelada`,
+      () => grava(() => st.reabrirDemanda(d), `${d.id} reaberta`));
   }
   if (f.id === 'fCan') {
     const a = st.acao(S.drawer.id), m = $('#cMot').value.trim();
