@@ -722,6 +722,13 @@ function renderForumDetalhe(fo) {
       ${itens.map((p, k) => itemCard(p, k)).join('')}
       <div class="row-actions"><button class="btn" data-do="foIncluir">+ Incluir na pauta</button><button class="btn primary" data-do="foEncerrar">Encerrar fórum</button></div>`;
   }
+  if (fo.situacao === 'Realizado' && fo.antigo) {
+    const dl = st.delib.filter(x => x.forum === fo.id);
+    return `${head}<div class="note">Fórum registrado antes da convocação com pauta: não tem pauta nem desdobramentos.</div>
+      ${fo.ata ? `<section class="panel"><header><h2>Ata</h2><span class="row-actions"><button class="btn sm" data-do="copiarAta">Copiar texto</button></span></header><textarea class="out" id="ataTxt" aria-label="Ata">${esc(S.ataRascunho && S.ataRascunho.fo === fo.id ? S.ataRascunho.texto : fo.ata)}</textarea>
+        <div class="row-actions" style="margin-top:10px;align-items:center"><button class="btn primary" data-do="salvarAta">Salvar ata no SharePoint</button><span class="small" id="ataEstado">${ataEstado(fo)}</span></div></section>` : ''}
+      <section class="panel"><header><h2>Deliberações</h2><span class="small muted">${dl.length}</span></header>${dl.length ? `<div class="list">${dl.map(x => `<div class="li"><span class="tag">${esc(x.tipo)}</span><div class="body">${esc(x.texto)}<div class="meta"><span>${esc(x.resp ? st.nome(x.resp) : '—')}</span>${x.demanda && st.demanda(x.demanda) ? `<span>${esc(st.demanda(x.demanda).titulo)}</span>` : ''}${x.acaoId ? `<button class="linkbtn" data-acao="${esc(x.acaoId)}">${esc(x.acaoId)}</button>` : ''}</div></div></div>`).join('')}</div>` : '<div class="empty small">Nenhuma deliberação registrada.</div>'}</section>`;
+  }
   if (fo.situacao === 'Realizado') {
     const texto = S.ataRascunho && S.ataRascunho.fo === fo.id ? S.ataRascunho.texto : fo.ata || st.ataDoForum(fo);
     return `${head}<section class="panel"><header><h2>Ata para o grupo do WhatsApp</h2><span class="row-actions">${fo.antigo ? '' : '<button class="btn sm" data-do="gerarAta">Gerar de novo</button>'}<button class="btn sm" data-do="copiarAta">Copiar texto</button></span></header>
