@@ -1042,7 +1042,7 @@ function drawerHtml() {
   if (modo === 'reprog') {
     const definir = !a.prazo;
     form = `<form id="fRep" class="form boxed">
-      ${!definir && a.reprogramacoes.length >= 1 ? `<div class="full note">Esta será a ${a.reprogramacoes.length + 1}ª reprogramação. A partir da segunda, a ação entra na pauta do fórum.</div>` : ''}
+      ${!definir && a.reprogramacoes.length >= 1 ? `<div class="full note">Esta será a ${a.reprogramacoes.length + 1}ª reprogramação. A partir da segunda, leve a ação ao próximo fórum.</div>` : ''}
       <div class="field"><label for="rPrazo">${definir ? 'Prazo' : 'Novo prazo'}</label><input type="date" id="rPrazo" required min="${HOJE}"></div>
       ${definir ? '<div class="field"><label>&nbsp;</label><span class="small muted">A ação ainda não tinha prazo; este passa a ser o prazo original.</span></div>' : '<div class="field full"><label for="rMot">Motivo</label><input type="text" id="rMot" required placeholder="Ex.: aguardando NCM da contabilidade"></div>'}
       <div class="full row-actions"><button class="btn primary" type="submit">${definir ? 'Salvar prazo' : 'Salvar novo prazo'}</button><button class="btn" type="button" data-do="modo" data-m="">Voltar</button><span class="small err-text" id="rErr" role="alert"></span></div></form>`;
