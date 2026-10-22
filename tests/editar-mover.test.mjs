@@ -101,12 +101,11 @@ test('mover a ação isolada para uma questão crítica cancela a pendência aut
   assert.equal(item(be, 'GP_Acoes', 'MOE-A001').fields.DemandaCodigo, 'MOE-QC-01');
   const pd = item(be, 'GP_Demandas', 'MOE-PD-01').fields;
   assert.equal(pd.Encerrada, true);
-  assert.equal(pd.MotivoCancelamento, 'Ação MOE-A001 movida para MOE-QC-01');
+  assert.equal('MotivoCancelamento' in pd, false);
   assert.equal(r.encerrou, true);
   await s.desfazerMover(a, r);
   assert.equal(item(be, 'GP_Acoes', 'MOE-A001').fields.DemandaCodigo, 'MOE-PD-01');
   assert.equal(pd.Encerrada, false);
-  assert.ok(!pd.MotivoCancelamento);
 });
 
 test('mover ação de uma demanda de verdade não encerra a origem', async () => {

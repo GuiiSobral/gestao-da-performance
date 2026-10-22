@@ -7,7 +7,7 @@ export const LISTS = {
   GP_Clientes: ['Title', 'Nome', 'ConsultorCodigo', 'SupervisorCodigo', 'Situacao', 'NaNovaBase', 'PastaSharePoint', 'ArquivoOrigem', 'Interno'],
   GP_Pessoas: ['Title', 'Nome', 'ClienteCodigo', 'Empresa', 'Nominal', 'Email', 'WhatsApp', 'Ativo'],
   GP_Frentes: ['Title', 'ClienteCodigo', 'Nome', 'Area', 'DonoCodigo', 'Apoio', 'Inicio', 'FimPrevisto', 'Encerrada', 'DataEncerramento', 'StatusOrigem', 'NotaMigracao'],
-  GP_Demandas: ['Title', 'ClienteCodigo', 'Assunto', 'Tipo', 'FrenteCodigo', 'Prioridade', 'ResponsavelCodigo', 'Area', 'PrazoDemanda', 'Encerrada', 'DataEncerramento', 'Origem', 'StatusOrigem', 'NotaMigracao', 'MotivoCancelamento'],
+  GP_Demandas: ['Title', 'ClienteCodigo', 'Assunto', 'Tipo', 'FrenteCodigo', 'Prioridade', 'ResponsavelCodigo', 'Area', 'PrazoDemanda', 'Encerrada', 'DataEncerramento', 'Origem', 'StatusOrigem', 'NotaMigracao'],
   GP_Acoes: ['Title', 'ClienteCodigo', 'DemandaCodigo', 'OQue', 'Problema', 'Causa', 'ResponsavelCodigo', 'Apoio', 'Area', 'Como', 'Quanto', 'Inicio', 'PrazoOriginal', 'Prazo', 'Status', 'DataConclusao', 'MotivoCancelamento', 'Origem', 'Registro', 'LinhaOrigem', 'ArquivoOrigem', 'StatusOrigem', 'ResponsavelOrigem'],
   GP_Reprogramacoes: ['Title', 'AcaoCodigo', 'ClienteCodigo', 'PrazoAnterior', 'PrazoNovo', 'Motivo', 'RegistradoEm', 'RegistradoPor'],
   GP_Foruns: ['Title', 'ClienteCodigo', 'Data', 'ConduzidoPor', 'Participantes', 'Ata'],
@@ -87,8 +87,7 @@ export class Store {
     this.demandas = raw.GP_Demandas.map(it => { const f = F(it); return {
       itemId: it.id, etag: it.etag, id: f.Title, cli: f.ClienteCodigo, titulo: f.Assunto || f.Title, tipo: f.Tipo || 'Pendência', frente: f.FrenteCodigo || null,
       prioridade: f.Prioridade || null, resp: f.ResponsavelCodigo || null, area: f.Area || '', prazo: d10(f.PrazoDemanda),
-      encerrada: !!f.Encerrada, dataEnc: d10(f.DataEncerramento), origem: f.Origem || '', statusOriginal: f.StatusOrigem || '', nota: f.NotaMigracao || '',
-      motivoCancel: f.MotivoCancelamento || '' }; });
+      encerrada: !!f.Encerrada, dataEnc: d10(f.DataEncerramento), origem: f.Origem || '', statusOriginal: f.StatusOrigem || '', nota: f.NotaMigracao || '' }; });
     this.reprog = raw.GP_Reprogramacoes.map(it => { const f = F(it); return {
       itemId: it.id, etag: it.etag, id: f.Title, acao: f.AcaoCodigo, cli: f.ClienteCodigo, de: d10(f.PrazoAnterior), para: d10(f.PrazoNovo),
       motivo: f.Motivo || '', em: d10(f.RegistradoEm), por: f.RegistradoPor || '' }; });
@@ -261,23 +260,19 @@ export class Store {
     d.encerrada = true; d.dataEnc = hoje;
   }
 
-  // Cancela uma demanda que não tem ação aberta (ex.: questão crítica que deixou de fazer sentido).
-  // O motivo é obrigatório e fica na própria demanda; nenhuma ação de fachada é criada.
-  async cancelarDemanda(d, motivo) {
-    const m = String(motivo || '').trim();
-    if (!m) throw new Error('Informe o motivo do cancelamento');
+  // Cancela uma demanda sem ação aberta (ex.: questão crítica que deixou de fazer sentido), sem pedir motivo
+  // e sem criar ação de fachada. Encerrada sem nenhuma ação concluída, ela aparece como Cancelada.
+  async cancelarDemanda(d) {
     if (d.encerrada) throw new Error(`A demanda ${d.id} já está encerrada`);
     if (this.acoesDe(d.id).some(a => a.status !== 'Concluída' && a.status !== 'Cancelada')) throw new Error(`A demanda ${d.id} tem ações abertas: conclua ou cancele as ações antes`);
     const hoje = hojeISO();
-    await this.upd('GP_Demandas', d, { Encerrada: true, DataEncerramento: toSP(hoje), MotivoCancelamento: m.slice(0, 255) });
-    d.encerrada = true; d.dataEnc = hoje; d.motivoCancel = m.slice(0, 255);
+    await this.upd('GP_Demandas', d, { Encerrada: true, DataEncerramento: toSP(hoje) });
+    d.encerrada = true; d.dataEnc = hoje;
   }
 
   async reabrirDemanda(d) {
-    const f = { Encerrada: false, DataEncerramento: null };
-    if (d.motivoCancel) f.MotivoCancelamento = null;
-    await this.upd('GP_Demandas', d, f);
-    d.encerrada = false; d.dataEnc = null; d.motivoCancel = '';
+    await this.upd('GP_Demandas', d, { Encerrada: false, DataEncerramento: null });
+    d.encerrada = false; d.dataEnc = null;
   }
 
   // Demanda nova criada pela pessoa (ao registrar ou ao mover uma ação). Código pelo tipo: QC, PD ou EF.
@@ -295,7 +290,7 @@ export class Store {
       fr.encerrada = false; fr.dataEnc = null;
     }
     const d = { itemId: it.id, etag: it.etag, id: code, cli, titulo: f.Assunto, tipo: t, frente: fr ? fr.id : null, prioridade: null, resp: resp || null, area: area || '',
-      prazo: prazo || null, encerrada: false, dataEnc: null, origem: f.Origem, statusOriginal: '', nota: '', motivoCancel: '' };
+      prazo: prazo || null, encerrada: false, dataEnc: null, origem: f.Origem, statusOriginal: '', nota: '' };
     this.demandas.push(d);
     return d;
   }
@@ -308,11 +303,8 @@ export class Store {
       demanda = await this.novaDemanda({ cli, titulo: (novaDem && novaDem.titulo) || acao, tipo: (novaDem && novaDem.tipo) || 'Pendência',
         frente: novaDem && novaDem.frente, resp, area, prazo, origem });
     } else if (demanda.encerrada) {
-      const fr = { Encerrada: false };
-      if (demanda.motivoCancel) { fr.DataEncerramento = null; fr.MotivoCancelamento = null; }
-      await this.upd('GP_Demandas', demanda, fr);
+      await this.upd('GP_Demandas', demanda, { Encerrada: false });
       demanda.encerrada = false;
-      if (demanda.motivoCancel) { demanda.dataEnc = null; demanda.motivoCancel = ''; }
     }
     const f = { ClienteCodigo: cli, DemandaCodigo: demanda.id, OQue: acao.slice(0, 255), Problema: (porque || '').slice(0, 255),
       ResponsavelCodigo: resp, Area: area, Como: como, Inicio: toSP(hoje), PrazoOriginal: toSP(prazo), Prazo: toSP(prazo),
@@ -372,7 +364,7 @@ export class Store {
   }
 
   // destino: código de uma demanda aberta do mesmo cliente, ou { titulo, tipo, frente } para criar uma nova.
-  // Se a origem era a pendência criada só para esta ação, ela é cancelada com o motivo "ação movida".
+  // Se a origem era a pendência criada só para esta ação, ela é cancelada (fica sem ações, então aparece como Cancelada).
   async moverAcao(a, destino) {
     const de = this.demanda(a.demanda);
     const soDela = this.pendenciaSoDela(de, a);
@@ -395,7 +387,7 @@ export class Store {
     a.demanda = para.id; a.modifiedDay = hojeISO();
     let encerrou = false;
     if (soDela) {
-      try { await this.cancelarDemanda(de, `Ação ${a.id} movida para ${para.id}`); encerrou = true; } catch (e) { /* a demanda fica sem plano: a pessoa decide */ }
+      try { await this.cancelarDemanda(de); encerrou = true; } catch (e) { /* a demanda fica sem plano: a pessoa decide */ }
     }
     return { de: de ? de.id : null, para: para.id, criada, encerrou };
   }

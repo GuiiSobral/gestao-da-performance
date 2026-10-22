@@ -93,7 +93,7 @@ function infoDem(d) {
   const v7 = ab.filter(a => a.prazo && a.prazo >= HOJE && a.prazo <= LIM7).length;
   const conc = ac.filter(a => a.status === 'Concluída').length;
   let status;
-  if (d.encerrada) status = d.motivoCancel || (ac.length && ac.every(a => a.status === 'Cancelada')) ? 'Cancelada' : 'Concluída';
+  if (d.encerrada) status = ac.some(a => a.status === 'Concluída') ? 'Concluída' : 'Cancelada';
   else if (ab.length) status = 'Em andamento';
   else if (ac.length) status = 'Validar encerramento';
   else status = 'Sem plano de ação';
@@ -431,8 +431,7 @@ function demRow(d, i, comCli) {
     </button>
     ${open ? `<div class="open">
       ${notas.length ? `<div class="note"><b>O que a migração encontrou</b><ul>${notas.map(x => `<li>${esc(x)}</li>`).join('')}</ul></div>` : ''}
-      <div class="small muted"><span class="mono">${esc(d.id)}</span>${d.origem ? ' · origem: ' + esc(d.origem) : ''}${d.prazo ? ` · prazo da demanda: ${fmt(d.prazo)}` : ''}${d.encerrada && d.dataEnc ? ` · ${d.motivoCancel ? 'cancelada' : 'encerrada'} em ${fmtF(d.dataEnc)}` : ''}</div>
-      ${d.encerrada && d.motivoCancel ? `<div class="small"><b>Motivo do cancelamento:</b> ${esc(d.motivoCancel)}</div>` : ''}
+      <div class="small muted"><span class="mono">${esc(d.id)}</span>${d.origem ? ' · origem: ' + esc(d.origem) : ''}${d.prazo ? ` · prazo da demanda: ${fmt(d.prazo)}` : ''}${d.encerrada && d.dataEnc ? ` · ${i.status === 'Cancelada' ? 'cancelada' : 'encerrada'} em ${fmtF(d.dataEnc)}` : ''}</div>
       ${i.ac.length ? `<div style="overflow-x:auto"><table class="mini"><tbody>${sortAcoes(i.ac).map(a => `<tr data-acao="${esc(a.id)}"><td class="c-id">${esc(a.id)}</td><td><button class="linkbtn plain" data-acao="${esc(a.id)}">${esc(a.acao)}</button></td><td class="c-nw">${esc(st.nome(a.resp) || '—')}</td><td class="c-nw">${pill(situacao(a))}</td></tr>`).join('')}</tbody></table></div>` : ''}
       <div class="row-actions">${i.aberta ? `<button class="btn sm" data-do="capturar" data-dem-pre="${esc(d.id)}">+ ${i.ac.length ? 'Nova ação nesta demanda' : 'Criar a primeira ação'}</button><button class="btn sm" data-do="respDem" data-id="${esc(d.id)}">Trocar responsável</button>` : ''}<button class="btn sm ghost" data-do="editDem" data-id="${esc(d.id)}">Editar</button>
         ${i.validar ? `<button class="btn sm primary" data-do="encerrarDem" data-id="${esc(d.id)}">Confirmar encerramento</button>` : ''}
@@ -882,7 +881,7 @@ function drawerHtml() {
     form = `<form id="fMov" class="form boxed">
       <div class="field full"><label for="mvDem">Mover para</label><select id="mvDem">${outras.length ? '<option value="">Escolha a demanda</option>' : ''}<option value="__nova__"${outras.length ? '' : ' selected'}>+ Nova demanda</option>${outras.map(x => `<option value="${esc(x.id)}">${esc(x.tipo === 'Questão crítica' ? 'QC · ' : x.tipo === 'Entrega de frente' ? 'Entrega · ' : '')}${esc(x.titulo)}</option>`).join('')}</select></div>
       ${novaDemHtml('mv', a.cli, a.acao, !outras.length)}
-      <div class="full small muted">${soDela ? `A pendência atual (${esc(d.id)}) foi criada só para esta ação: ela será cancelada com o motivo “ação movida”.` : 'A demanda atual continua; se ficar sem ações, aparece como Sem plano de ação.'} Prazo, responsável e histórico da ação não mudam.</div>
+      <div class="full small muted">${soDela ? `A pendência atual (${esc(d.id)}) foi criada só para esta ação: ela será cancelada.` : 'A demanda atual continua; se ficar sem ações, aparece como Sem plano de ação.'} Prazo, responsável e histórico da ação não mudam.</div>
       <div class="full row-actions"><button class="btn primary" type="submit">Mover ação</button><button class="btn" type="button" data-do="modo" data-m="">Voltar</button><span class="small err-text" id="mvErr" role="alert"></span></div></form>`;
   }
   if (modo === 'cliente') form = trocaCliHtml('acao', a);
@@ -1033,22 +1032,8 @@ function respDemModalHtml() {
     <p class="small muted" style="margin:0">As ações da demanda continuam com os responsáveis delas. Para trocar o de uma ação, abra a ação.</p>
   </div>`;
 }
-function cancDemModalHtml() {
-  const d = st.demanda(S.modal.dem);
-  if (!d) return '';
-  return `<div class="modal" role="dialog" aria-modal="true" aria-labelledby="mT">
-    ${cabModal('Cancelar demanda')}
-    <p class="small muted" style="margin:0"><span class="mono">${esc(d.id)}</span> · ${esc(d.tipo)} · ${esc(d.titulo)}</p>
-    <form id="fCanD" class="form">
-      <div class="field full"><label for="cdMot">Por que cancelar?</label><input type="text" id="cdMot" required maxlength="255" placeholder="Ex.: deixou de ser prioridade do cliente; tratada na frente X"></div>
-      <div class="full row-actions"><button class="btn danger" type="submit">Cancelar demanda</button><button class="btn" type="button" data-do="fechar">Voltar</button><span class="small err-text" id="cdErr" role="alert"></span></div>
-    </form>
-    <p class="small muted" style="margin:0">A demanda sai da gestão como Cancelada, com o motivo gravado. Nenhuma ação é criada. Dá para desfazer em 6 segundos; depois disso, criar uma ação nela a reabre.</p>
-  </div>`;
-}
 function modalHtml() {
   if (S.modal.kind === 'respDem') return respDemModalHtml();
-  if (S.modal.kind === 'cancDem') return cancDemModalHtml();
   if (S.modal.kind === 'editDem') return editDemModalHtml();
   if (S.modal.kind === 'comp') return compModalHtml();
   if (S.modal.kind === 'frente') return frenteModalHtml();
@@ -1179,7 +1164,7 @@ function onClick(e) {
     case 'modo': S.drawer.modo = ds.m || null; S.drawer.tcCli = ''; renderLayer(); { const alvo = { cancel: '#cMot', remarcar: '#rcData', resp: '#tResp', reprog: '#rPrazo', editar: '#eOque', mover: '#mvDem', cliente: '#tcCli' }[ds.m] || '#dwT'; const i = $(alvo) || $('#layer .boxed button'); if (i) i.focus(); } break;
     case 'editDem': S.drawer = null; S.modal = { kind: 'editDem', dem: ds.id }; renderLayer(); { const i = $('#eTit'); if (i) i.focus(); } break;
     case 'respDem': S.drawer = null; S.modal = { kind: 'respDem', dem: ds.id }; renderLayer(); { const i = $('#tResp'); if (i) i.focus(); } break;
-    case 'cancDem': S.drawer = null; S.modal = { kind: 'cancDem', dem: ds.id }; renderLayer(); { const i = $('#cdMot'); if (i) i.focus(); } break;
+    case 'cancDem': { const d = st.demanda(ds.id); if (d) grava(() => st.cancelarDemanda(d), `${d.id} cancelada`, () => grava(() => st.reabrirDemanda(d), `${d.id} reaberta`)); break; }
     case 'novoComp': {
       const r = ROUTES[route()];
       S.drawer = null; S.modal = { kind: 'comp', cli: (r.global ? S.fc.cli : '') || S.cli }; renderLayer(); { const i = $('#cOque'); if (i) i.focus(); } break;
@@ -1297,13 +1282,6 @@ function onSubmit(e) {
         r => grava(async () => { const v = await st.trocarClienteComp(r.novo, r.cliAntigo, { resp: r.respAntigo }); S.drawer = null; return v; },
           v => `Voltou para ${cliNome(r.cliAntigo)} como ${v.novo.id}`));
     }
-  }
-  if (f.id === 'fCanD') {
-    const d = st.demanda(S.modal.dem), m = $('#cdMot').value.trim();
-    if (!d) return;
-    if (!m) { $('#cdErr').textContent = 'Informe o motivo: sem motivo, a demanda não é cancelada.'; return; }
-    grava(async () => { await st.cancelarDemanda(d, m); S.modal = null; }, `${d.id} cancelada`,
-      () => grava(() => st.reabrirDemanda(d), `${d.id} reaberta`));
   }
   if (f.id === 'fCan') {
     const a = st.acao(S.drawer.id), m = $('#cMot').value.trim();

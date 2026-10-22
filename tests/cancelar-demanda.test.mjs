@@ -1,4 +1,4 @@
-// Cancelar demanda sem ação aberta: grava o motivo na própria demanda, sem criar ação de fachada; reabrir e nova ação limpam o cancelamento.
+// Cancelar demanda sem ação aberta: um clique, sem motivo e sem ação de fachada; aparece como Cancelada; desfazer e nova ação reabrem.
 // Rodar com: npm test
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
@@ -23,60 +23,43 @@ async function abrir() {
   return { be, s };
 }
 
-test('cancela a demanda sem ação, grava motivo e data, e não cria ação', async () => {
+test('cancela a demanda sem ação: só Encerrada e data, sem motivo e sem criar ação', async () => {
   const { be, s } = await abrir();
-  const d = s.demanda('MET-QC-01');
-  await s.cancelarDemanda(d, '  Deixou de ser prioridade do cliente ');
+  await s.cancelarDemanda(s.demanda('MET-QC-01'));
   const f = be.db.GP_Demandas[0].fields;
   assert.equal(f.Encerrada, true);
-  assert.equal(f.MotivoCancelamento, 'Deixou de ser prioridade do cliente');
   assert.equal(f.DataEncerramento, `${hojeISO()}T12:00:00Z`);
+  assert.equal('MotivoCancelamento' in f, false);
+  assert.deepEqual(Object.keys(be.log.at(-1)[3]).sort(), ['DataEncerramento', 'Encerrada']);
   assert.equal(be.db.GP_Acoes.length, 1);
-  assert.equal(d.motivoCancel, 'Deixou de ser prioridade do cliente');
-  // relido do SharePoint, continua cancelada
-  const s2 = new Store(be); await s2.load();
-  assert.equal(s2.demanda('MET-QC-01').motivoCancel, 'Deixou de ser prioridade do cliente');
-});
-
-test('sem motivo, não cancela', async () => {
-  const { be, s } = await abrir();
-  await assert.rejects(s.cancelarDemanda(s.demanda('MET-QC-01'), '   '), /motivo/);
-  assert.equal(be.db.GP_Demandas[0].fields.Encerrada, false);
 });
 
 test('demanda com ação aberta não pode ser cancelada direto', async () => {
   const { be, s } = await abrir();
-  await assert.rejects(s.cancelarDemanda(s.demanda('MET-QC-02'), 'Motivo'), /ações abertas/);
+  await assert.rejects(s.cancelarDemanda(s.demanda('MET-QC-02')), /ações abertas/);
   assert.equal(be.db.GP_Demandas[1].fields.Encerrada, false);
 });
 
-test('desfazer reabre e limpa o motivo', async () => {
+test('desfazer reabre a demanda', async () => {
   const { be, s } = await abrir();
   const d = s.demanda('MET-QC-01');
-  await s.cancelarDemanda(d, 'Motivo');
+  await s.cancelarDemanda(d);
   await s.reabrirDemanda(d);
   const f = be.db.GP_Demandas[0].fields;
   assert.equal(f.Encerrada, false);
-  assert.ok(!f.MotivoCancelamento);
   assert.ok(!f.DataEncerramento);
-  assert.equal(d.motivoCancel, '');
 });
 
-test('nova ação numa demanda cancelada a reabre e limpa o cancelamento', async () => {
+test('nova ação numa demanda cancelada a reabre', async () => {
   const { be, s } = await abrir();
   const d = s.demanda('MET-QC-01');
-  await s.cancelarDemanda(d, 'Motivo');
+  await s.cancelarDemanda(d);
   await s.novaAcao({ cli: 'MET', acao: 'Retomar', dem: d.id, resp: 'SOLVE-GUILHERME', prazo: '2026-12-30', area: 'Produção', origem: 'Captura rápida' });
-  const f = be.db.GP_Demandas[0].fields;
-  assert.equal(f.Encerrada, false);
-  assert.ok(!f.MotivoCancelamento);
+  assert.equal(be.db.GP_Demandas[0].fields.Encerrada, false);
   assert.equal(d.encerrada, false);
 });
 
-test('reabrir uma demanda encerrada normalmente não toca na coluna de motivo', async () => {
-  const { be, s } = await abrir();
-  const d = s.demanda('MET-QC-01');
-  await s.encerrarDemanda(d);
-  await s.reabrirDemanda(d);
-  assert.equal('MotivoCancelamento' in be.db.GP_Demandas[0].fields, false);
+test('o app não lê nem grava coluna de motivo em GP_Demandas', async () => {
+  const { LISTS } = await import('../src/store.js');
+  assert.equal(LISTS.GP_Demandas.includes('MotivoCancelamento'), false);
 });
