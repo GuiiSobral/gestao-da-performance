@@ -920,6 +920,7 @@ function renderAgenda() {
 }
 
 /* ---------- Minha semana ---------- */
+// "todos" em S.pessoaSemana: Todos os responsáveis (nenhum código de pessoa é "todos").
 function renderSemana() {
   const fc = S.semCli, doCli = x => !fc || x.cli === fc;
   const ab = st.acoes.filter(a => aberta(a) && st.nominal(a.resp) && doCli(a));
@@ -929,25 +930,48 @@ function renderSemana() {
   const pes = [...new Set([...Object.keys(cont), ...Object.keys(contC)])].map(k => [k, cont[k] || 0, contC[k] || 0])
     .sort((a, b) => b[1] - a[1] || b[2] - a[2] || st.nome(a[0]).localeCompare(st.nome(b[0])));
   const eu = st.eu();
+  const todos = S.pessoaSemana === 'todos';
   const tem = k => !!(cont[k] || contC[k]);
   // Com cliente filtrado, a pessoa escolhida continua na tela mesmo sem nada nele (em vez de trocar de pessoa sem avisar).
   const temEmAlgum = k => st.acoes.some(a => a.resp === k && aberta(a) && st.nominal(k)) || st.compromissos.some(c => c.resp === k && c.status === 'Pendente');
-  if (!S.pessoaSemana || !(tem(S.pessoaSemana) || (fc && temEmAlgum(S.pessoaSemana)))) S.pessoaSemana = eu && tem(eu.id) ? eu.id : (pes[0] || [])[0];
-  if (S.pessoaSemana && !tem(S.pessoaSemana)) pes.unshift([S.pessoaSemana, 0, 0]);
+  if (!todos) {
+    if (!S.pessoaSemana || !(tem(S.pessoaSemana) || (fc && temEmAlgum(S.pessoaSemana)))) S.pessoaSemana = eu && tem(eu.id) ? eu.id : (pes[0] || [])[0];
+    if (S.pessoaSemana && !tem(S.pessoaSemana)) pes.unshift([S.pessoaSemana, 0, 0]);
+  }
   const optC = (v, lab) => `<option value="${esc(v)}"${v === fc ? ' selected' : ''}>${esc(lab)}</option>`;
   const selCli = `<select id="fsCli" aria-label="Cliente">${optC('', 'Todos os clientes')}${clientesComp().map(c => optC(c.id, c.nome)).join('')}</select>`;
   if (!S.pessoaSemana) return `<div class="toolbar">${selCli}</div><div class="empty">${fc ? `Nada aberto em ${esc(cliNome(fc))} com responsável nominal.` : 'Nenhuma ação aberta com responsável nominal.'}</div>`;
-  const p = S.pessoaSemana, minhas = sortAcoes(ab.filter(a => a.resp === p));
-  const meusComp = sortComp(compAb.filter(c => c.resp === p && c.data && c.data <= LIM7));
+  const p = S.pessoaSemana, minhas = sortAcoes(ab.filter(a => todos || a.resp === p));
+  const meusComp = sortComp(compAb.filter(c => (todos || c.resp === p) && c.data && c.data <= LIM7));
   const varios = new Set(minhas.map(a => a.cli)).size > 1;
   const sec = [['Vencidas', minhas.filter(a => situacao(a).o === 1)], [`Vencem até ${fmt(LIM7)}`, minhas.filter(a => situacao(a).o === 2)], ['Sem prazo', minhas.filter(a => situacao(a).o === 3)], ['Depois', minhas.filter(a => situacao(a).o === 4)]];
+  const contagem = (c, k) => `${c} ${plural(c, 'ação', 'ações')}${k ? `, ${k} ${plural(k, 'compromisso', 'compromissos')}` : ''}`;
+  const optP = `<option value="todos"${todos ? ' selected' : ''}>Todos os responsáveis · ${contagem(ab.length, compAb.length)}</option>`
+    + pes.map(([n, c, k]) => `<option value="${esc(n)}"${n === p ? ' selected' : ''}>${esc(st.nome(n))}${st.pessoa(n) && st.pessoa(n).empresa === 'Solve' ? ' (Solve)' : ''} · ${contagem(c, k)}</option>`).join('');
+  const vazio = todos ? `Nenhuma ação aberta${fc ? ` em ${esc(cliNome(fc))}` : ''}.` : fc ? `Nada aberto para ${esc(st.nome(p))} em ${esc(cliNome(fc))}.` : 'Nenhuma ação aberta.';
+  const lado = todos ? porResponsavel(pes, ab, compAb, eu)
+    : `<section class="panel"><header><h2>Mensagem de cobrança</h2><button class="btn sm" data-do="copiarCob">Copiar</button></header><textarea class="out" id="cobTxt" readonly aria-label="Mensagem de cobrança" style="min-height:260px">${esc(cobranca(p, sec, varios))}</textarea></section>`;
   return `
   <p class="lede-sub" style="margin:0">O que vence, o que atrasou e o que depende de cada pessoa, em todos os clientes. A mensagem de cobrança sai pronta para o WhatsApp.</p>
-  <div class="toolbar"><label class="small muted" for="selP">Ver como</label><select id="selP">${pes.map(([n, c, k]) => `<option value="${esc(n)}"${n === p ? ' selected' : ''}>${esc(st.nome(n))}${st.pessoa(n) && st.pessoa(n).empresa === 'Solve' ? ' (Solve)' : ''} · ${c} ${plural(c, 'ação', 'ações')}${k ? `, ${k} ${plural(k, 'compromisso', 'compromissos')}` : ''}</option>`).join('')}</select>${eu && p === eu.id ? '<span class="pill acc">você</span>' : ''}${selCli}</div>
+  <div class="toolbar"><label class="small muted" for="selP">Ver como</label><select id="selP">${optP}</select>${eu && p === eu.id ? '<span class="pill acc">você</span>' : ''}${selCli}</div>
   <div class="grid3">
-    <div class="stack">${meusComp.length ? `<section class="panel"><header><h2>Compromissos até ${fmt(LIM7)}</h2><a class="btn sm ghost" style="text-decoration:none" href="#agenda?p=${encodeURIComponent(p)}${fc ? '&c=' + encodeURIComponent(fc) : ''}">Ver todos</a></header>${compRows(meusComp, false)}</section>` : ''}${sec.filter(s => s[1].length).map(([t, l]) => `<section class="panel"><header><h2>${t}</h2><span class="small muted">${l.length}</span></header>${quickTable(l, varios)}</section>`).join('') || `<div class="empty">${fc ? `Nada aberto para ${esc(st.nome(p))} em ${esc(cliNome(fc))}.` : 'Nenhuma ação aberta.'}</div>`}</div>
-    <section class="panel"><header><h2>Mensagem de cobrança</h2><button class="btn sm" data-do="copiarCob">Copiar</button></header><textarea class="out" id="cobTxt" readonly aria-label="Mensagem de cobrança" style="min-height:260px">${esc(cobranca(p, sec, varios))}</textarea></section>
+    <div class="stack">${meusComp.length ? `<section class="panel"><header><h2>Compromissos até ${fmt(LIM7)}</h2><a class="btn sm ghost" style="text-decoration:none" href="#agenda?p=${encodeURIComponent(p)}${fc ? '&c=' + encodeURIComponent(fc) : ''}">Ver todos</a></header>${compRows(meusComp, todos)}</section>` : ''}${sec.filter(s => s[1].length).map(([t, l]) => `<section class="panel"><header><h2>${t}</h2><span class="small muted">${l.length}</span></header>${quickTable(l, varios)}</section>`).join('') || `<div class="empty">${vazio}</div>`}</div>
+    ${lado}
   </div>`;
+}
+// Quadro de Todos os responsáveis: abertas por pessoa; clicar no nome abre a semana dela, com a mensagem de cobrança.
+function porResponsavel(pes, ab, compAb, eu) {
+  if (!pes.length) return '<section class="panel"><header><h2>Por responsável</h2></header><div class="empty small">Ninguém com ação ou compromisso aberto.</div></section>';
+  const linhas = pes.map(([n, c, k]) => {
+    const l = ab.filter(a => a.resp === n), o = x => l.filter(a => situacao(a).o === x).length;
+    const atrC = compAb.filter(x => x.resp === n && sitComp(x).o === 1).length;
+    const v = o(1);
+    return `<tr><td><button class="linkbtn" data-semp="${esc(n)}" title="Ver a semana de ${esc(st.nome(n))}">${esc(st.nome(n))}</button>${eu && n === eu.id ? ' <span class="pill acc">você</span>' : ''}<span class="sub" style="display:block;color:var(--muted);font-size:.78rem">${k ? `${k} ${plural(k, 'compromisso', 'compromissos')}${atrC ? ` · ${atrC} ${plural(atrC, 'atrasado', 'atrasados')}` : ''}` : 'sem compromisso'}</span></td>
+      <td class="num" style="${v ? 'color:var(--bad);font-weight:600' : ''}">${v}</td><td class="num">${o(2)}</td><td class="num">${o(3)}</td><td class="num">${c}</td></tr>`;
+  }).join('');
+  return `<section class="panel"><header><h2>Por responsável</h2><span class="small muted">${pes.length} ${plural(pes.length, 'pessoa', 'pessoas')}</span></header>
+    <div style="overflow-x:auto"><table class="mini resp-tab"><thead><tr><th>Pessoa</th><th class="num" title="Ações vencidas">Venc.</th><th class="num" title="Vencem até ${fmt(LIM7)}">7 d</th><th class="num" title="Ações sem prazo">S/ prazo</th><th class="num" title="Todas as ações abertas">Total</th></tr></thead><tbody>${linhas}</tbody></table></div>
+    <p class="small muted" style="margin:10px 0 0">Clique no nome para ver a semana da pessoa e copiar a mensagem de cobrança dela.</p></section>`;
 }
 function cobranca(p, sec, varios) {
   const L = [`Oi, ${st.nome(p)}! Tudo bem?`, 'Seguem suas ações em aberto:', ''];
@@ -1341,6 +1365,7 @@ function onClick(e) {
   const ds = t.dataset;
   if (ds.tema) { aplicarTema(ds.tema); render(); const b = document.querySelector(`#${t.closest('.tema').id} [data-tema="${ds.tema}"]`); if (b) b.focus(); return; }
   if (ds.fcli) { e.stopPropagation(); filtrarPelaTag(ds.fcli); return; }
+  if (ds.semp) { S.pessoaSemana = ds.semp; render(); window.scrollTo(0, 0); const f = $('#selP'); if (f) f.focus(); return; }
   if (ds.cliSet) { S.cli = ds.cliSet; S.todos = false; }
   if (ds.cliGo) { S.cli = ds.cliGo; go('visao'); return; }
   if (ds.sig) { e.preventDefault(); S.fa = { ...FA0, sit: ds.sig }; S.todos = false; S.drawer = null; go('acoes'); return; }

@@ -61,7 +61,7 @@ Compromissos pontuais e de rotina: um passo só, com data marcada (ex.: solicita
 
 - Tema claro, escuro ou automático (segue o sistema), escolhido no rodapé do menu ou em **Conta** no celular; fica salvo no navegador.
 - Filtros e telas ficam no endereço (ex.: `#acoes?cli=MOE&sit=vencidas`): o Voltar funciona e o link pode ser enviado.
-- Ações e Demandas têm o filtro de cliente na barra de filtros, com **Todos os clientes** (`#acoes?cli=todos`): junta os clientes da carteira, fora o interno e os encerrados. Minha semana e Compromissos também filtram por cliente. Nas listas que misturam clientes, clicar no código do cliente (ex.: MOE) filtra a tela por ele.
+- Ações e Demandas têm o filtro de cliente na barra de filtros, com **Todos os clientes** (`#acoes?cli=todos`): junta os clientes da carteira, fora o interno e os encerrados. Minha semana e Compromissos também filtram por cliente. Minha semana tem **Todos os responsáveis** (`#semana?p=todos`): as ações e os compromissos abertos de todos, com o quadro Por responsável (vencidas, vencem em 7 dias, sem prazo e total); clicar no nome abre a semana da pessoa e a mensagem de cobrança dela. Nas listas que misturam clientes, clicar no código do cliente (ex.: MOE) filtra a tela por ele.
 - Concluir uma ação ou encerrar uma demanda mostra **Desfazer** por 6 segundos.
 - O rascunho da ata fica guardado na aba até ser salvo no SharePoint.
 

@@ -260,6 +260,8 @@ body.busy .btn,body.busy [data-q]{pointer-events:none;opacity:.6}
 .strip.s4{grid-template-columns:repeat(4,minmax(0,1fr))}
 @media (max-width:900px){.strip.s4{grid-template-columns:repeat(2,minmax(0,1fr))}.strip.s4>div:nth-child(2n){border-right:0}.strip.s4>div:nth-child(-n+2){border-bottom:1px solid var(--line)}}
 .linkbtn.plain{font-weight:inherit;text-align:left}
+.resp-tab th,.resp-tab td.num{padding-left:4px;padding-right:4px;letter-spacing:0}
+.resp-tab .num{text-align:right}
 .dem .m .tag{flex:none}
 
 /* avisos: sucesso com "Desfazer" e erro que fica até fechar */
