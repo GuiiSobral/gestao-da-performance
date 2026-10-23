@@ -657,9 +657,10 @@ function renderConvocacao() {
   }).join('');
   return `<div class="sechead"><button class="btn sm ghost" data-cv="voltar">← Fóruns</button><span class="small muted">${fo ? `Editando a convocação ${esc(fo.id)}` : `Novo fórum · ${esc(cliNome(S.cli))}`}</span></div>
   <section class="panel"><header><h2>1. Quando e onde</h2></header>
-    <div class="form"><div class="field"><label for="cvData">Data</label><input type="date" id="cvData" value="${esc(c.data)}" min="${fo ? '' : HOJE}"></div>
+    <div class="form"><div class="field"><label for="cvData">Data</label><input type="date" id="cvData" value="${esc(c.data)}"></div>
     <div class="field"><label for="cvHora">Horário</label><input type="time" id="cvHora" value="${esc(c.hora)}"></div>
-    <div class="field full"><label for="cvLocal">Local</label><input id="cvLocal" maxlength="255" value="${esc(c.local)}" placeholder="Ex.: Sala de reuniões da Moendo ou link do Teams"></div></div></section>
+    <div class="field full"><label for="cvLocal">Local</label><input id="cvLocal" maxlength="255" value="${esc(c.local)}" placeholder="Ex.: Sala de reuniões da Moendo ou link do Teams"></div>
+    <div class="full small note" id="cvPassado"${c.data && c.data < HOJE ? '' : ' hidden'}>Data já passou: use para registrar um fórum que já aconteceu. Ele fica agendado; depois é só iniciar, marcar a presença e tratar a pauta. Conclusões e novos prazos registrados nele ficam com a data de hoje.</div></div></section>
   <section class="panel"><header><h2>2. Participantes</h2><span class="small muted">${c.conv.length} ${plural(c.conv.length, 'convocado', 'convocados')}</span></header>
     <div class="grid2"><div><div class="label" style="margin-bottom:6px">${esc(cliNome(S.cli))}</div><div class="conv-grid">${doCli.map(chk).join('') || '<span class="small muted">Ninguém do cliente cadastrado em GP_Pessoas.</span>'}</div></div>
     <div><div class="label" style="margin-bottom:6px">Solve</div><div class="conv-grid">${solve.map(chk).join('')}</div></div></div></section>
@@ -707,8 +708,10 @@ function renderForumDetalhe(fo) {
   const tratados = itens.filter(p => p.trat).length;
   const aus = fo.convocados.filter(c => !fo.presentes.includes(c));
   let acoesHead = '';
-  if (fo.situacao === 'Agendado') acoesHead = `<div class="row-actions"><button class="btn primary" data-do="foIniciar">Iniciar fórum</button><button class="btn" data-do="foEditar">Editar convocação</button><button class="btn danger ghost" data-do="foCancelar">Cancelar fórum</button></div>`;
-  if (fo.situacao === 'Em andamento') acoesHead = `<div class="row-actions"><button class="btn sm" data-do="foPresenca">Presença</button></div>`;
+  const excluir = '<button class="btn danger ghost" data-do="foExcluir">Excluir fórum</button>';
+  if (fo.situacao === 'Agendado') acoesHead = `<div class="row-actions"><button class="btn primary" data-do="foIniciar">Iniciar fórum</button><button class="btn" data-do="foEditar">Editar convocação</button><button class="btn danger ghost" data-do="foCancelar">Cancelar fórum</button>${excluir}</div>`;
+  else if (fo.situacao === 'Em andamento') acoesHead = `<div class="row-actions"><button class="btn" data-do="foPresenca">Presença</button>${excluir}</div>`;
+  else acoesHead = `<div class="row-actions">${excluir}</div>`;
   const head = `<div class="sechead"><button class="btn sm ghost" data-do="foLista">← Fóruns</button><span class="mono small muted">${esc(fo.id)}</span></div>
     <section class="panel"><header><h2>Fórum de ${quandoFo(fo)}</h2>${sitPill(fo.situacao)}</header>
       <dl class="w5 fo-dl"><dt>LOCAL</dt><dd>${esc(fo.local) || '<span class="muted">—</span>'}</dd>
@@ -1413,6 +1416,20 @@ function onClick(e) {
       grava(() => st.cancelarForum(fo), 'Fórum cancelado', () => grava(() => st.reagendarForum(fo), 'Fórum agendado de novo'));
       break;
     }
+    case 'foExcluir': {
+      const fo = st.forum(S.fo.id); if (!fo) break;
+      const np = st.pautaDe(fo.id).length, nd = st.delib.filter(x => x.forum === fo.id).length;
+      const ligados = [np ? `${np} ${plural(np, 'item da pauta', 'itens da pauta')}` : '', nd ? `${nd} ${plural(nd, 'deliberação', 'deliberações')}` : '', fo.ata ? 'a ata' : ''].filter(Boolean);
+      const msg = `Excluir o fórum de ${fmtF(fo.data)}${fo.hora ? ' às ' + fo.hora : ''}?\n\nVão para a lixeira do SharePoint: o fórum${ligados.length ? ', ' + ligados.join(', ') : ''}. ` +
+        `As ações criadas nele continuam no plano.${fo.situacao === 'Em andamento' ? ' O fórum está em andamento.' : ''}\n\nDá para restaurar pela lixeira do site em até 93 dias.`;
+      if (!confirm(msg)) break;
+      grava(async () => {
+        const r = await st.excluirForum(fo);
+        if (S.ataRascunho && S.ataRascunho.fo === fo.id) { S.ataRascunho = null; S.ataDirty = false; esquecerAta(); }
+        S.fo = {}; syncHash(); return r;
+      }, `Fórum de ${fmtF(fo.data)} excluído`);
+      break;
+    }
     case 'foIniciar': S.drawer = null; S.modal = { kind: 'presenca', fo: S.fo.id, iniciar: true }; renderLayer(); break;
     case 'foPresenca': S.drawer = null; S.modal = { kind: 'presenca', fo: S.fo.id, iniciar: false }; renderLayer(); break;
     case 'foIncluir': S.drawer = null; S.incl = { q: '', ft: 'todas', fr: '', abertos: [], sug: null }; S.modal = { kind: 'incluir', fo: S.fo.id }; renderLayer(); { const i = $('#inQ'); if (i) i.focus(); } break;
@@ -1655,7 +1672,7 @@ function cliqueConvocacao(ds) {
     case 'salvar': {
       const c = S.conv;
       c.data = $('#cvData').value; c.hora = $('#cvHora').value; c.local = $('#cvLocal').value.trim();
-      const falta = !c.data ? 'Informe a data.' : !c.hora ? 'Informe o horário.' : !c.local ? 'Informe o local.' : !c.conv.length ? 'Escolha pelo menos um participante.' : !c.itens.length ? 'Escolha pelo menos um item para a pauta.' : !c.editId && c.data < HOJE ? 'A data precisa ser a partir de hoje.' : '';
+      const falta = !c.data ? 'Informe a data.' : !c.hora ? 'Informe o horário.' : !c.local ? 'Informe o local.' : !c.conv.length ? 'Escolha pelo menos um participante.' : !c.itens.length ? 'Escolha pelo menos um item para a pauta.' : '';
       if (falta) { c.err = falta; $('#cvErr').textContent = falta; return; }
       c.err = '';
       const dados = { cli: S.cli, data: c.data, hora: c.hora, local: c.local, convocados: c.conv, itens: c.itens };
@@ -1692,6 +1709,7 @@ function onInput(e) {
     S.ataDirty = true; guardarAta(); atualizarEstadoAta();
   }
   if (S.conv && ['cvData', 'cvHora', 'cvLocal'].includes(e.target.id)) { S.conv[{ cvData: 'data', cvHora: 'hora', cvLocal: 'local' }[e.target.id]] = e.target.value; S.conv.dirty = true; }
+  if (e.target.id === 'cvData') { const n = $('#cvPassado'); if (n) n.hidden = !(e.target.value && e.target.value < HOJE); }
   if (e.target.id === 'pkQ' || e.target.id === 'inQ') {
     const f = e.target.id === 'pkQ' ? S.conv : S.incl, id = e.target.id;
     f.q = e.target.value; clearTimeout(buscaT);

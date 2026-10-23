@@ -245,3 +245,47 @@ test('cancelar só fórum agendado; ata só depois de encerrar', async () => {
   await assert.rejects(s.cancelarForum(fo), /agendado/);
   await assert.rejects(s.salvarAta(fo, 'x'), /encerrar/);
 });
+
+test('convoca fórum com data que já passou e conduz normalmente', async () => {
+  const { s } = await abrir();
+  const fo = await s.convocarForum({ ...CONV, data: '2026-10-15', itens: [{ tipo: 'Demanda', reg: 'MOE-QC-01' }] });
+  assert.equal(fo.id, 'MOE-FO-20261015');
+  assert.equal(fo.situacao, 'Agendado');
+  await s.iniciarForum(fo, ['MOE-ANA']);
+  await s.encerrarForum(fo);
+  assert.match(s.ataDoForum(fo), /15\/10\/2026 às 09:30/);
+});
+
+test('excluir leva fórum, pauta e deliberações para a lixeira; as ações ficam', async () => {
+  const { be, s, fo } = await emAndamento([{ tipo: 'Demanda', reg: 'MOE-PD-01' }, { tipo: 'Tópico livre', assunto: 'Informes' }]);
+  s.alvoPauta = s.pautaDe(fo.id)[0].id;
+  const x = await s.registrarDeliberacao({ cli: 'MOE', texto: 'Ana envia o extrato', tipo: 'Deliberado', resp: 'MOE-ANA', dem: 'MOE-PD-01', prazo: '2026-11-10', gera: true });
+  s.alvoPauta = null;
+  const r = await s.excluirForum(fo);
+  assert.deepEqual(r, { pauta: 2, delib: 1 });
+  assert.equal(be.db.GP_Foruns.some(f => f.fields.Title === fo.id), false);
+  assert.equal(be.db.GP_Pauta.length, 0);
+  assert.equal(be.db.GP_Deliberacoes.length, 0);
+  assert.ok(be.db.GP_Acoes.some(a => a.fields.Title === x.acaoId));
+  assert.equal(s.forum(fo.id), null);
+  assert.equal(s.forumAtivo, null);
+  assert.deepEqual(s.avisos, []);
+});
+
+test('excluir leva também o item que outra pessoa incluiu depois', async () => {
+  const { be, s } = await abrir();
+  const fo = await s.convocarForum({ ...CONV, itens: [{ tipo: 'Demanda', reg: 'MOE-QC-01' }] });
+  be.inserirExterno('GP_Pauta', { Title: `${fo.id}-P02`, ForumCodigo: fo.id, ClienteCodigo: 'MOE', Tipo: 'Tópico livre', Assunto: 'De outra tela' });
+  await s.excluirForum(fo);
+  assert.equal(be.db.GP_Pauta.length, 0);
+});
+
+test('excluir o fórum que trouxe não tratados devolve esses itens para a próxima pauta', async () => {
+  const { s, fo } = await emAndamento([{ tipo: 'Demanda', reg: 'MOE-QC-01' }]);
+  await s.encerrarForum(fo);
+  const nt = s.naoTratados('MOE');
+  const prox = await s.convocarForum({ ...CONV, data: '2026-11-12', itens: [{ tipo: 'Demanda', reg: 'MOE-QC-01', origem: 'Não tratado no fórum anterior', anterior: nt[0].id }] });
+  assert.equal(s.naoTratados('MOE').length, 0);
+  await s.excluirForum(prox);
+  assert.equal(s.naoTratados('MOE').length, 1);
+});

@@ -733,6 +733,32 @@ export class Store {
     return fo;
   }
 
+  // Exclui o fórum em qualquer situação: o fórum, os itens da pauta e as deliberações dele vão para a lixeira do site
+  // (restauráveis pelo SharePoint). As ações criadas no fórum continuam no plano. Itens que este fórum tinha trazido
+  // de um fórum anterior voltam a aparecer como não tratados.
+  async excluirForum(fo) {
+    // Lê na hora o que está ligado ao fórum, para levar também o que outra pessoa incluiu depois que a tela carregou.
+    const [pauta, delib] = await Promise.all([
+      this.be.items('GP_Pauta', ['Title', 'ForumCodigo']),
+      this.be.items('GP_Deliberacoes', ['Title', 'ForumCodigo'])
+    ]);
+    const filhos = [...pauta.filter(it => it.fields.ForumCodigo === fo.id).map(it => ['GP_Pauta', it.id]),
+      ...delib.filter(it => it.fields.ForumCodigo === fo.id).map(it => ['GP_Deliberacoes', it.id])];
+    // Primeiro o fórum: se algo falhar depois, o que sobrar fica órfão e não aparece em lugar nenhum.
+    await this.be.remove('GP_Foruns', fo.itemId);
+    this.foruns = this.foruns.filter(x => x !== fo);
+    if (this.forumAtivo === fo.id) this.forumAtivo = null;
+    let falhas = 0;
+    for (const [lista, id] of filhos) {
+      try { await this.be.remove(lista, id); } catch (e) { console.error(e); falhas++; }
+    }
+    const nPauta = this.pauta.filter(x => x.forum === fo.id).length, nDelib = this.delib.filter(x => x.forum === fo.id).length;
+    this.pauta = this.pauta.filter(x => x.forum !== fo.id);
+    this.delib = this.delib.filter(x => x.forum !== fo.id);
+    if (falhas) this.avisos.push(`O fórum foi excluído, mas ${falhas} ${falhas === 1 ? 'registro ligado a ele não foi' : 'registros ligados a ele não foram'} para a lixeira. Eles não aparecem no app.`);
+    return { pauta: nPauta, delib: nDelib };
+  }
+
   async cancelarForum(fo) {
     if (fo.situacao !== 'Agendado') throw new Error('Só dá para cancelar um fórum agendado');
     await this.upd('GP_Foruns', fo, { Situacao: 'Cancelado' });

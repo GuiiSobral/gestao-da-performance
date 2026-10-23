@@ -37,6 +37,8 @@ O fórum nasce de uma convocação e passa por **Agendado → Em andamento → R
   - **Tópico livre** para assunto que ainda não é registro. Se o texto parece com uma demanda aberta, o app avisa: oferece incluir a demanda ou diz que ela já está na pauta. Tópico com o mesmo texto de outro não entra.
   - Itens que ficaram **Não tratado** no fórum anterior já entram na pauta do próximo; quem convoca pode tirar.
 - Enquanto agendado: **Editar convocação** e **Cancelar fórum** (com Desfazer).
+- A data pode ser passada, para registrar um fórum que já aconteceu: ele fica agendado e segue o mesmo fluxo. Conclusões e novos prazos registrados nele ficam com a data do dia em que foram lançados.
+- **Excluir fórum**, em qualquer situação: o fórum, os itens da pauta e as deliberações dele vão para a lixeira do site (restauráveis em até 93 dias pelo SharePoint). As ações criadas nele continuam no plano, e os não tratados que ele tinha trazido voltam para a próxima pauta.
 - **Iniciar fórum** registra a presença (convocados e quem participou sem ter sido convocado). Um fórum em andamento por cliente.
 - Durante o fórum, cada item tem os botões das ações (Concluir, Novo prazo e o detalhe), **+ Nova ação**, **Deliberação**, **Mantido sem mudança** e **Não tratado**; tópico livre tem anotação. O que é feito no item fica registrado nele (desdobramentos) e define o tratamento: Concluído, Repactuado, Cancelado, Encerrado, Mantido, Tratado ou Não tratado. Desfazer tira o desdobramento.
 - **+ Incluir na pauta** durante o fórum: registro existente, tópico livre ou registro novo criado na reunião.
