@@ -25,6 +25,16 @@ Endereço: https://guiisobral.github.io/gestao-da-performance/
 - **Trocar cliente** de ação aberta ou compromisso pendente feito no cliente errado, só sem história (sem reprogramação, sem deliberação, fora da migração; no compromisso, sem série e sem pendência). O código carrega o cliente, então o registro é recriado no cliente certo com código novo e o antigo vai para a lixeira do site (com a pendência criada só para ele). O responsável precisa atender o cliente novo. Tem Desfazer, que recria no cliente original com outro código.
 - Responsável de ação, compromisso ou demanda aberta pode ser trocado (**Trocar** na ação e no compromisso, **Trocar responsável** na demanda). Não pede motivo: o prazo não muda e o histórico de versões da lista guarda quem trocou. Tem **Desfazer** por 6 segundos. No compromisso que se repete, a próxima vez já nasce com o novo responsável.
 
+## Exportar ações
+
+Na tela **Ações**, cada linha tem uma caixa para marcar (a do título marca todas as da lista). As marcações continuam ao trocar filtros e clientes; a barra de baixo mostra quantas estão marcadas e quantas ficaram fora dos filtros atuais.
+
+**Exportar PDF ou Excel** abre a janela com o cabeçalho que vai no arquivo: cliente, responsável (nominal quando é um só; senão a lista), data e hora de emissão, quem emitiu e o resumo pela situação. Dá para trocar o título e agrupar por responsável ou por demanda.
+
+- **PDF** (A4 deitado): código, ação, demanda, responsável e apoio, prazo (com o original e o nº de reprogramações), situação colorida; cliente quando há mais de um. Opção de incluir por quê e como. Rodapé com emissão e paginação.
+- **Excel**: todas as colunas da ação (5W2H, área, início, prazos, reprogramações, status, situação, conclusão, motivo de cancelamento), datas como data, títulos congelados e com filtro.
+- As bibliotecas (jsPDF e write-excel-file) só são baixadas na hora de exportar. Nada é gravado no SharePoint.
+
 ## Fórum (`GP_Foruns` e `GP_Pauta`)
 
 O fórum nasce de uma convocação e passa por **Agendado → Em andamento → Realizado** (ou **Cancelado**).

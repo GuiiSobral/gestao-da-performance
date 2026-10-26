@@ -351,3 +351,20 @@ details>summary{list-style-position:inside}
 @media (max-width:640px){.pauta-ed li{grid-template-columns:24px minmax(0,1fr)}.pauta-ed li .row-actions{grid-column:2}}
 .w5 dd .sub{display:block;font-size:.8rem;color:var(--muted);margin-top:2px}
 .nota-in{width:100%;min-height:70px;border:1px solid var(--line-strong);border-radius:8px;padding:8px 10px;background:var(--surface);resize:vertical}
+
+/* marcar ações para exportar */
+th.c-sel,td.c-sel{width:1%;padding:0}
+.selbox{display:flex;align-items:center;justify-content:center;min-width:40px;min-height:40px;cursor:pointer}
+.selbox input{width:17px;height:17px;margin:0;accent-color:var(--accent);cursor:pointer}
+tbody tr.marcada,tbody tr.marcada:hover{background:var(--accent-soft)}
+.selbar{position:sticky;bottom:12px;z-index:5;display:flex;align-items:center;justify-content:space-between;gap:10px 16px;flex-wrap:wrap;
+  background:var(--surface);border:1px solid var(--accent);border-radius:12px;padding:10px 14px;box-shadow:var(--shadow);margin-top:-4px}
+.exp-cab{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 16px;background:var(--surface-2);border:1px solid var(--line);border-radius:10px;padding:12px 14px}
+.exp-cab>div{display:flex;flex-direction:column;gap:2px;min-width:0}
+.exp-cab .full{grid-column:1/-1}
+@media (max-width:640px){
+  table.cards tr{position:relative}
+  table.cards td.c-sel{position:absolute;top:4px;right:6px;width:auto}
+  table.cards td.c-id{padding-right:44px}
+  .exp-cab{grid-template-columns:1fr}
+}

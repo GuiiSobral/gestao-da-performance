@@ -1,6 +1,7 @@
 // Interface da Gestão da Performance (mesmas telas do protótipo aprovado), lendo e gravando nas Listas do SharePoint.
 import { AREAS, hojeISO, lerLinha, TIPOS_COMP, TIPOS_DEM, REPETICOES, TOPICO, normTxt } from './store.js';
 import { aplicarTema, temaHtml } from './theme.js';
+import { montarRelatorio, baixarPdf, baixarExcel } from './exportar.js';
 
 let st = null;          // Store
 let ctx = {};           // { logout, listUrl }
@@ -11,7 +12,8 @@ const S = {
   cli: null, fa: { q: '', sit: 'abertas', resp: '', area: '', tipo: '' }, fd: { tipo: 'todas', st: 'abertas' },
   demOpen: new Set(), fo: {}, conv: null, incl: null, pessoaSemana: null, drawer: null, modal: null, busy: false, reloading: false,
   opener: null, ataDirty: false, fc: { p: '', cli: '', ver: 'pendentes' },
-  todos: false, semCli: ''   // todos: Ações e Demandas de todos os clientes; semCli: cliente filtrado em Minha semana
+  todos: false, semCli: '',   // todos: Ações e Demandas de todos os clientes; semCli: cliente filtrado em Minha semana
+  sel: new Set()              // ações marcadas na tela Ações para exportar (continuam marcadas ao trocar filtros)
 };
 
 /* ---------- utilidades ---------- */
@@ -244,6 +246,7 @@ function render() {
   const pos = focused === 'fq' ? document.activeElement.selectionStart : null;
   st.forumAtivo = null;   // só a tela do fórum em andamento liga o registro de desdobramentos
   $('#view').innerHTML = R.r();
+  if (r === 'acoes') atualizarSel();
   syncHash();
   if (focused === 'fq') { const i = $('#fq'); if (i) { i.focus(); i.setSelectionRange(pos, pos); } }
   renderLayer();
@@ -512,14 +515,78 @@ function renderAcoes() {
   </div>
   <div class="small muted">${list.length} ${plural(list.length, 'ação', 'ações')}${todos ? ` de ${nCli} ${plural(nCli, 'cliente', 'clientes')} · números somados da carteira` : ''} · ordenadas pela urgência: vencidas primeiro, pelo maior atraso</div>
   <div class="tablewrap"><table class="cards">
-    <thead><tr><th>Código</th><th>Ação</th><th>Demanda</th><th>Responsável</th><th>Prazo</th><th>Situação</th></tr></thead>
-    <tbody>${list.length ? list.map(a => { const d = st.demanda(a.demanda); return `<tr class="click" data-acao="${esc(a.id)}">
+    <thead><tr><th class="c-sel"><label class="selbox" title="Marcar todas as ações da lista"><input type="checkbox" id="selAll" aria-label="Marcar todas as ações da lista"${list.length ? '' : ' disabled'}></label></th><th>Código</th><th>Ação</th><th>Demanda</th><th>Responsável</th><th>Prazo</th><th>Situação</th></tr></thead>
+    <tbody>${list.length ? list.map(a => { const d = st.demanda(a.demanda); return `<tr class="click${S.sel.has(a.id) ? ' marcada' : ''}" data-acao="${esc(a.id)}">
+      <td class="c-sel"><label class="selbox"><input type="checkbox" data-sel="${esc(a.id)}" aria-label="Marcar ${esc(a.id)} para exportar"${S.sel.has(a.id) ? ' checked' : ''}></label></td>
       <td class="c-id" data-l="Código">${esc(a.id)}</td>
       <td class="c-main" style="min-width:240px">${todos ? tagCli(a.cli) + ' ' : ''}<button class="linkbtn plain" data-acao="${esc(a.id)}">${esc(a.acao)}</button>${a.reprogramacoes.length ? `<span class="sub">${a.reprogramacoes.length}ª reprogramação · prazo original ${fmt(a.prazoOriginal)}</span>` : ''}</td>
       <td data-l="Demanda" style="min-width:180px">${esc(d ? d.titulo : a.demanda)}<span class="sub">${esc(d ? d.tipo : '')}</span></td>
       <td class="c-nw" data-l="Responsável">${respHtml(a.resp)}</td>
       <td class="num c-nw" data-l="Prazo">${fmt(a.prazo)}</td>
-      <td class="c-nw" data-l="Situação">${pill(situacao(a))}</td></tr>`; }).join('') : '<tr class="noc"><td colspan="6"><div class="empty">Nenhuma ação com esses filtros.</div></td></tr>'}</tbody></table></div>`;
+      <td class="c-nw" data-l="Situação">${pill(situacao(a))}</td></tr>`; }).join('') : '<tr class="noc"><td colspan="7"><div class="empty">Nenhuma ação com esses filtros.</div></td></tr>'}</tbody></table></div>
+  <div class="selbar" id="selbar" role="region" aria-label="Ações marcadas" hidden>
+    <span id="selTxt" aria-live="polite"></span>
+    <span class="row-actions"><button class="btn sm primary" data-do="exportar">Exportar PDF ou Excel</button><button class="btn sm ghost" data-do="selLimpar">Desmarcar todas</button></span>
+  </div>`;
+}
+// Barra de seleção e caixa "marcar todas" sem redesenhar a lista (não perde rolagem nem foco).
+function atualizarSel() {
+  for (const id of [...S.sel]) if (!st.acao(id)) S.sel.delete(id);
+  const vis = [...document.querySelectorAll('#view input[data-sel]')];
+  const nVis = vis.filter(i => i.checked).length, fora = S.sel.size - nVis;
+  const all = $('#selAll');
+  if (all) { all.checked = vis.length > 0 && nVis === vis.length; all.indeterminate = nVis > 0 && nVis < vis.length; }
+  const bar = $('#selbar'); if (!bar) return;
+  bar.hidden = !S.sel.size;
+  $('#selTxt').innerHTML = `<b>${S.sel.size} ${plural(S.sel.size, 'ação marcada', 'ações marcadas')}</b>${fora > 0 ? ` <span class="muted">· ${fora} fora dos filtros atuais</span>` : ''}`;
+}
+function marcar(input, sim) {
+  input.checked = sim;
+  const id = input.dataset.sel; if (sim) S.sel.add(id); else S.sel.delete(id);
+  const tr = input.closest('tr'); if (tr) tr.classList.toggle('marcada', sim);
+}
+
+/* ---------- Exportar ações marcadas ---------- */
+const EXP_KEY = 'gp.exportar';
+function prefsExport() { try { return JSON.parse(localStorage.getItem(EXP_KEY)) || {}; } catch (e) { return {}; } }
+function opExport() {
+  const t = $('#xTit'), g = $('#xAgr'), d = $('#xDet');
+  const pf = prefsExport();
+  return { hoje: HOJE, agora: new Date(), titulo: t ? t.value : 'Plano de ação', agrupar: g ? g.value : (pf.agrupar || ''), detalhes: d ? d.checked : !!pf.detalhes };
+}
+function exportModalHtml() {
+  const ids = [...S.sel], pf = prefsExport();
+  const rel = montarRelatorio(st, ids, { hoje: HOJE, agrupar: pf.agrupar || '' });
+  const o = (v, l) => `<option value="${v}"${(pf.agrupar || '') === v ? ' selected' : ''}>${l}</option>`;
+  return `<div class="modal" role="dialog" aria-modal="true" aria-labelledby="mT">
+    ${cabModal(`Exportar ${ids.length} ${plural(ids.length, 'ação', 'ações')}`)}
+    <div class="exp-cab">${rel.cab.map(([k, v]) => `<div><span class="label">${esc(k)}</span><span>${esc(v)}</span></div>`).join('')}<div class="full"><span class="label">Resumo</span><span>${esc(rel.resumo)}</span></div></div>
+    <div class="form">
+      <div class="field full"><label for="xTit">Título do relatório</label><input id="xTit" maxlength="80" value="${esc(S.expTitulo || 'Plano de ação')}"></div>
+      <div class="field"><label for="xAgr">Agrupar por</label><select id="xAgr">${o('', 'Nenhum (mais urgentes primeiro)')}${o('resp', 'Responsável')}${o('demanda', 'Demanda')}</select></div>
+      <div class="field" style="justify-content:flex-end"><label class="check"><input type="checkbox" id="xDet"${pf.detalhes ? ' checked' : ''}> Incluir por quê e como no PDF</label></div>
+      <div class="full row-actions"><button class="btn primary" type="button" data-do="expPdf">Baixar PDF</button><button class="btn" type="button" data-do="expXls">Baixar Excel</button><span class="small err-text" id="xErr" role="alert"></span></div>
+    </div>
+    <p class="small muted" style="margin:0">O cabeçalho sai com cliente, responsável, data e hora de emissão e quem emitiu. O Excel leva todas as colunas da ação (5W2H, prazos, reprogramações e status), com filtro nos títulos; o agrupamento vira a ordem das linhas.</p>
+  </div>`;
+}
+async function exportar(formato) {
+  const ids = [...S.sel].filter(id => st.acao(id));
+  if (!ids.length) { fechar(true); return; }
+  const op = opExport();
+  try { localStorage.setItem(EXP_KEY, JSON.stringify({ agrupar: op.agrupar, detalhes: op.detalhes })); } catch (e) { /* sem storage */ }
+  S.expTitulo = op.titulo;
+  const rel = montarRelatorio(st, ids, op);
+  const ext = formato === 'pdf' ? 'pdf' : 'xlsx';
+  document.body.classList.add('busy'); const err = $('#xErr'); if (err) err.textContent = '';
+  try {
+    if (formato === 'pdf') await baixarPdf(rel); else await baixarExcel(rel);
+    fechar(true);
+    toast(`${rel.arquivo}.${ext} baixado`);
+  } catch (e) {
+    console.error(e);
+    const el = $('#xErr'); if (el) el.textContent = 'Não foi possível gerar o arquivo. Tente de novo; se persistir, me avise.';
+  } finally { document.body.classList.remove('busy'); }
 }
 
 /* ---------- Fórum ---------- */
@@ -1261,6 +1328,7 @@ function modalHtml() {
   if (S.modal.kind === 'comp') return compModalHtml();
   if (S.modal.kind === 'frente') return frenteModalHtml();
   if (S.modal.kind === 'entrega') return entregaModalHtml();
+  if (S.modal.kind === 'exportar') return exportModalHtml();
   const cli = S.modal.cli || S.cli;
   const pre = S.modal.dem || '';
   const pes = st.pessoasPara(cli);
@@ -1361,6 +1429,7 @@ const atualizarEstadoAta = () => { const el = $('#ataEstado'); if (el) el.innerH
 /* ---------- eventos ---------- */
 function onClick(e) {
   const acct = $('#acct'); if (acct && acct.open && !e.target.closest('#acct')) acct.open = false;
+  if (e.target.closest('.c-sel')) return;   // caixa de marcar: só o change trata
   const t = e.target.closest('button, a, tr[data-acao], tr[data-comp], tr[data-cli-go], [data-do]');
   if (!t) return;
   const ds = t.dataset;
@@ -1389,6 +1458,10 @@ function onClick(e) {
   if (ds.go) { if (ds.fd) S.fd = { tipo: 'todas', st: ds.fd }; go(ds.go); return; }
   switch (ds.do) {
     case 'fechar': fechar(); break;
+    case 'exportar': if (S.sel.size) { S.drawer = null; S.modal = { kind: 'exportar' }; renderLayer(); { const i = $('#xTit'); if (i) i.focus(); } } break;
+    case 'expPdf': exportar('pdf'); break;
+    case 'expXls': exportar('xlsx'); break;
+    case 'selLimpar': S.sel.clear(); document.querySelectorAll('#view input[data-sel]').forEach(i => marcar(i, false)); atualizarSel(); { const a = $('#selAll'); if (a) a.focus(); } break;
     case 'modo': S.drawer.modo = ds.m || null; S.drawer.tcCli = ''; renderLayer(); { const alvo = { cancel: '#cMot', remarcar: '#rcData', resp: '#tResp', reprog: '#rPrazo', editar: '#eOque', mover: '#mvDem', cliente: '#tcCli' }[ds.m] || '#dwT'; const i = $(alvo) || $('#layer .boxed button'); if (i) i.focus(); } break;
     case 'editDem': S.drawer = null; S.modal = { kind: 'editDem', dem: ds.id }; renderLayer(); { const i = $('#eTit'); if (i) i.focus(); } break;
     case 'respDem': S.drawer = null; S.modal = { kind: 'respDem', dem: ds.id }; renderLayer(); { const i = $('#tResp'); if (i) i.focus(); } break;
@@ -1745,6 +1818,8 @@ function onInput(e) {
 function onChange(e) {
   const id = e.target.id;
   const t = e.target;
+  if (t.dataset.sel) { marcar(t, t.checked); atualizarSel(); return; }
+  if (id === 'selAll') { document.querySelectorAll('#view input[data-sel]').forEach(i => marcar(i, t.checked)); atualizarSel(); return; }
   if (t.dataset.pk && S.conv) { cvToggle(t.dataset.pk, t.dataset.id, t.checked); render(); focoPor(`[data-pk="${t.dataset.pk}"][data-id="${CSS.escape(t.dataset.id)}"]`); return; }
   if (t.dataset.cvp && S.conv) { const l = S.conv.conv, k = l.indexOf(t.dataset.cvp); if (t.checked && k < 0) l.push(t.dataset.cvp); if (!t.checked && k >= 0) l.splice(k, 1); S.conv.dirty = true; render(); focoPor(`[data-cvp="${CSS.escape(t.dataset.cvp)}"]`); return; }
   if (['pkFt', 'pkFr', 'inFt', 'inFr'].includes(id)) {
