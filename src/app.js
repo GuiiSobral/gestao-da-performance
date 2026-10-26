@@ -107,10 +107,11 @@ function infoFr(f) {
   const ac = dems.flatMap(d => st.acoesDe(d.id)), ab = ac.filter(aberta);
   const val = ac.filter(a => a.status !== 'Cancelada'), conc = ac.filter(a => a.status === 'Concluída').length;
   const prog = val.length ? Math.round(conc * 100 / val.length) : 0;
-  const status = f.encerrada ? 'Concluída' : ab.length ? 'Em andamento' : 'Sem plano ativo';
+  // Encerrada sem nenhuma ação concluída (e sem a planilha antiga dizer que foi concluída) aparece como Cancelada, como na demanda.
+  const status = f.encerrada ? (conc || /conclu/i.test(f.statusOriginal || '') ? 'Concluída' : 'Cancelada') : ab.length ? 'Em andamento' : 'Sem plano ativo';
   const atrasada = status === 'Em andamento' && f.fim && f.fim < HOJE;
   const venc = ab.filter(a => a.prazo && a.prazo < HOJE).length;
-  const farol = status === 'Sem plano ativo' ? 'bad' : status === 'Concluída' ? 'off' : (atrasada || venc) ? 'bad' : ab.some(a => !a.prazo) ? 'warn' : 'good';
+  const farol = status === 'Sem plano ativo' ? 'bad' : f.encerrada ? 'off' : (atrasada || venc) ? 'bad' : ab.some(a => !a.prazo) ? 'warn' : 'good';
   return { dems, ac, ab, prog, status, atrasada, venc, farol, conc, val: val.length };
 }
 
@@ -366,7 +367,7 @@ function renderVisao() {
     <tbody>${frs.map(({ f, i }) => `<tr><td>${dot(i.farol, FAROL[i.farol])}</td><td><b>${esc(f.nome)}</b><span class="sub">${esc(f.area)}${f.nota ? ' · ' + esc(f.nota) : ''}</span></td>
       <td class="c-nw">${respHtml(f.dono)}</td><td class="num c-nw">${f.fim ? fmt(f.fim) : '—'}</td>
       <td><div class="prog"><span class="t"><span class="f" style="width:${i.prog}%"></span></span><span class="n">${i.ac.length ? i.prog + '%' : '—'}</span></div><span class="sub">${i.conc} de ${i.val} ações</span></td>
-      <td class="c-nw">${i.status === 'Em andamento' && i.atrasada ? '<span class="pill bad">Atrasada</span>' : i.status === 'Sem plano ativo' ? '<span class="pill bad line">Sem plano ativo</span>' : i.status === 'Concluída' ? '<span class="pill ok">Concluída</span>' : '<span class="pill good">Em andamento</span>'}</td>
+      <td class="c-nw">${i.status === 'Em andamento' && i.atrasada ? '<span class="pill bad">Atrasada</span>' : i.status === 'Sem plano ativo' ? '<span class="pill bad line">Sem plano ativo</span>' : i.status === 'Concluída' ? '<span class="pill ok">Concluída</span>' : i.status === 'Cancelada' ? '<span class="pill off">Cancelada</span>' : '<span class="pill good">Em andamento</span>'}</td>
       <td class="c-nw"><span class="row-actions" style="flex-wrap:nowrap;justify-content:flex-end">${f.encerrada ? '' : i.dems.some(d => !d.encerrada) ? `<button class="btn sm ghost" data-do="capturar" data-dem-pre="${esc(i.dems.find(d => !d.encerrada).id)}" aria-label="Nova ação na frente ${esc(f.nome)}">+ Ação</button>` : ''}<button class="btn sm ghost" data-do="novaEntrega" data-fr="${esc(f.id)}" aria-label="Nova entrega na frente ${esc(f.nome)}">+ Entrega</button></span></td></tr>`).join('')}</tbody></table></div>` : '<div class="empty small">Nenhuma frente cadastrada para este cliente.</div>'}</section>`;
 }
 
