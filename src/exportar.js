@@ -145,7 +145,7 @@ export async function gerarPdf(rel) {
       }
       case 'demanda': return l.demanda + (l.demandaTipo ? `\n${l.demandaTipo}` : '');
       case 'resp': return l.respNome + (l.respSolve ? ' (Solve)' : '') + (l.apoio ? `\nApoio: ${l.apoio}` : '');
-      case 'prazo': return (dataBR(l.prazo) || '—') + (l.reprog ? `\nOriginal: ${dataBR(l.prazoOriginal)}\n${l.reprog}ª reprogramação` : '');
+      case 'prazo': return (dataBR(l.prazo) || '—') + (l.reprog ? `\nOrig. ${dataBR(l.prazoOriginal)}\n${l.reprog}ª reprogramação` : '');
       case 'sit': return l.sit.t;
       default: return l[k] || '';
     }
