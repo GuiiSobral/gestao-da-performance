@@ -368,3 +368,17 @@ tbody tr.marcada,tbody tr.marcada:hover{background:var(--accent-soft)}
   table.cards td.c-id{padding-right:44px}
   .exp-cab{grid-template-columns:1fr}
 }
+
+/* acompanhamento: linha do tempo de andamentos na ação e no compromisso */
+.acomp{display:flex;flex-direction:column;gap:8px}
+.acomp .field textarea{min-height:56px}
+.tl{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:10px}
+.tl>li{padding-left:10px;border-left:2px solid var(--line);font-size:.86rem}
+.tl .tl-h{font-size:.78rem;color:var(--muted)}
+.tl .tl-t{white-space:pre-wrap;overflow-wrap:anywhere;margin-top:2px}
+.tl .row-actions{margin-top:4px}
+.tl .row-actions{gap:2px}
+.tl .row-actions .btn.sm{border-color:transparent;background:none;padding:1px 6px;font-size:.76rem;font-weight:600;color:var(--muted)}
+.tl .row-actions .btn.sm:hover{color:var(--accent);text-decoration:underline}
+.sub.and{overflow-wrap:anywhere}
+.drawer.fixo{animation:none}

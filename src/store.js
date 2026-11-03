@@ -17,10 +17,15 @@ export const LISTS = {
   GP_Indicadores: ['Title', 'ClienteCodigo', 'Area', 'Nome', 'Formula', 'Unidade', 'Polaridade', 'Frequencia', 'ResponsavelCodigo', 'Situacao'],
   GP_Medicoes: ['Title', 'IndicadorCodigo', 'ClienteCodigo', 'Mes', 'Meta', 'Realizado', 'Comentario'],
   GP_Compromissos: ['Title', 'ClienteCodigo', 'OQue', 'Tipo', 'ResponsavelCodigo', 'ContraparteCodigo', 'Data', 'DataOriginal', 'Hora', 'Recorrencia',
-    'Status', 'DataRealizacao', 'Resultado', 'SerieCodigo', 'DemandaCodigo', 'Registro', 'RegistradoPor']
+    'Status', 'DataRealizacao', 'Resultado', 'SerieCodigo', 'DemandaCodigo', 'Registro', 'RegistradoPor'],
+  GP_Acompanhamentos: ['Title', 'ClienteCodigo', 'RegistroTipo', 'RegistroCodigo', 'Texto', 'RegistradoEm', 'RegistradoPor']
 };
 // Listas que o app tolera não encontrar (o resto do app segue funcionando sem elas).
-const OPCIONAIS = new Set(['GP_Compromissos', 'GP_Pauta']);
+const OPCIONAIS = new Set(['GP_Compromissos', 'GP_Pauta', 'GP_Acompanhamentos']);
+// Acompanhamento: registro livre do que aconteceu durante a execução de uma ação ou compromisso.
+// Não muda status, prazo nem farol, e não entra na ata do fórum.
+const TIPO_REG = { acao: 'Ação', comp: 'Compromisso' };
+export const MAX_ACOMP = 4000;
 export const TIPOS_COMP = ['Solicitar', 'Entregar', 'Reunião', 'Outro'];
 // Tipos de demanda que a pessoa escolhe ao criar ou editar; os outros (entrega, deliberação, desvio) nascem de outras telas.
 export const TIPOS_DEM = ['Pendência', 'Questão crítica'];
@@ -69,7 +74,7 @@ export class Store {
   clear() {
     this.clientes = []; this.pessoas = []; this.frentes = []; this.demandas = []; this.acoes = [];
     this.reprog = []; this.foruns = []; this.delib = []; this.indicadores = []; this.medicoes = []; this.compromissos = [];
-    this.pauta = [];
+    this.pauta = []; this.acomp = [];
   }
 
   async load() {
@@ -128,6 +133,13 @@ export class Store {
       itemId: it.id, etag: it.etag, id: f.Title, indicador: f.IndicadorCodigo, cli: f.ClienteCodigo, mes: d10(f.Mes),
       meta: f.Meta ?? null, realizado: f.Realizado ?? null, comentario: f.Comentario || '' }; });
     this.compromissos = (raw.GP_Compromissos || []).map(it => this.comp(it));
+    this.acomp = (raw.GP_Acompanhamentos || []).map(it => this.acompDe(it));
+  }
+
+  acompDe(it) {
+    const f = it.fields || {};
+    return { itemId: it.id, etag: it.etag, id: f.Title, cli: f.ClienteCodigo, tipo: f.RegistroTipo === 'Compromisso' ? 'comp' : 'acao',
+      reg: f.RegistroCodigo, texto: f.Texto || '', em: f.RegistradoEm || it.modified || null, por: f.RegistradoPor || '' };
   }
 
   comp(it) {
@@ -486,6 +498,7 @@ export class Store {
     }
     this.acoes = this.acoes.filter(x => x !== a);
     this.acoes.push(nova);
+    await this.religarAcomp('acao', a.id, nova.id, cli);
     let apagouDem = false;
     if (soDela) {
       try { await this.be.remove('GP_Demandas', de.itemId); this.demandas = this.demandas.filter(x => x !== de); apagouDem = true; } catch (e) { /* fica sem plano */ }
@@ -515,7 +528,89 @@ export class Store {
     }
     this.compromissos = this.compromissos.filter(x => x !== c);
     this.compromissos.push(novo);
+    await this.religarAcomp('comp', c.id, novo.id, cli);
     return { novo, antigo: c.id, cliAntigo: c.cli, respAntigo: c.resp };
+  }
+
+  // ---------- acompanhamento de ações e compromissos ----------
+  // Quantos registros quiser em cada ação ou compromisso, do mais novo para o mais antigo.
+  acompanhamentos(tipo, cod) {
+    return this.acomp.filter(n => n.tipo === tipo && n.reg === cod)
+      .sort((a, b) => String(b.em || '').localeCompare(String(a.em || '')) || b.id.localeCompare(a.id, 'pt', { numeric: true }));
+  }
+  ultimoAcomp(tipo, cod) { return this.acompanhamentos(tipo, cod)[0] || null; }
+  // Compromisso que se repete: os registros de todas as vezes da série, para o histórico não se perder a cada nova vez.
+  acompanhamentosSerie(c) {
+    const cods = new Set(this.serieDe(c).map(x => x.id));
+    return this.acomp.filter(n => n.tipo === 'comp' && cods.has(n.reg))
+      .sort((a, b) => String(b.em || '').localeCompare(String(a.em || '')) || b.id.localeCompare(a.id, 'pt', { numeric: true }));
+  }
+  // Cada pessoa edita e exclui só o que ela mesma registrou.
+  meuAcomp(n) { const eu = this.user.name || this.user.username || ''; return !n.por || n.por === eu; }
+  semListaAcomp() { return !!(this.faltando && this.faltando.includes('GP_Acompanhamentos')); }
+
+  textoAcomp(texto) {
+    const t = String(texto || '').trim();
+    if (!t) throw new Error('Escreva o andamento');
+    if (t.length > MAX_ACOMP) throw new Error(`O andamento passa de ${MAX_ACOMP} caracteres`);
+    return t;
+  }
+
+  async registrarAcomp(tipo, obj, texto) {
+    if (!TIPO_REG[tipo]) throw new Error(`tipo ${tipo} não existe`);
+    if (this.semListaAcomp()) throw new Error('A lista GP_Acompanhamentos ainda não foi criada no SharePoint');
+    const t = this.textoAcomp(texto);
+    const em = new Date().toISOString(), por = this.user.name || this.user.username || 'Solve';
+    const f = { ClienteCodigo: obj.cli, RegistroTipo: TIPO_REG[tipo], RegistroCodigo: obj.id, Texto: t, RegistradoEm: em, RegistradoPor: por };
+    const { it, code } = await this.criar('GP_Acompanhamentos', this.acomp, u => this.proximo(u, `${obj.id}-N`, 2), c => ({ Title: c, ...f }));
+    const n = this.acompDe({ id: it.id, etag: it.etag, fields: { Title: code, ...f } });
+    this.acomp.push(n);
+    return n;
+  }
+
+  // Devolve o texto anterior, para o Desfazer.
+  async editarAcomp(n, texto) {
+    if (!this.meuAcomp(n)) throw new Error('Só quem registrou pode editar este andamento');
+    const t = this.textoAcomp(texto);
+    if (t === n.texto) throw Object.assign(new Error('Nada mudou'), { nadaMudou: true });
+    const ant = n.texto;
+    await this.upd('GP_Acompanhamentos', n, { Texto: t });
+    n.texto = t;
+    return ant;
+  }
+
+  // Vai para a lixeira do site. O Desfazer recria com o mesmo código, data e autor.
+  async excluirAcomp(n) {
+    if (!this.meuAcomp(n)) throw new Error('Só quem registrou pode excluir este andamento');
+    await this.be.remove('GP_Acompanhamentos', n.itemId);
+    this.acomp = this.acomp.filter(x => x !== n);
+    return { ...n };
+  }
+  async restaurarAcomp(n) {
+    const f = { ClienteCodigo: n.cli, RegistroTipo: TIPO_REG[n.tipo], RegistroCodigo: n.reg, Texto: n.texto, RegistradoEm: n.em, RegistradoPor: n.por };
+    const { it, code } = await this.criar('GP_Acompanhamentos', this.acomp, u => (u.has(n.id) ? this.proximo(u, `${n.reg}-N`, 2) : n.id), c => ({ Title: c, ...f }));
+    const x = this.acompDe({ id: it.id, etag: it.etag, fields: { Title: code, ...f } });
+    this.acomp.push(x);
+    return x;
+  }
+
+  // Na troca de cliente o registro ganha código novo: os andamentos vão junto (código, cliente e registro).
+  // Se algum não for, avisa; ele continua no SharePoint, ligado ao código antigo.
+  async religarAcomp(tipo, de, para, cli) {
+    const lista = this.acompanhamentos(tipo, de).reverse();
+    if (!lista.length) return;
+    const usados = new Set(this.acomp.map(x => x.id));
+    let falhas = 0;
+    try { for (const t of await this.be.titulos('GP_Acompanhamentos')) usados.add(t); }
+    catch (e) { console.error(e); falhas = lista.length; lista.length = 0; }
+    for (const n of lista) {
+      const code = this.proximo(usados, `${para}-N`, 2);
+      try {
+        await this.upd('GP_Acompanhamentos', n, { Title: code, RegistroCodigo: para, ClienteCodigo: cli });
+        usados.add(code); n.id = code; n.reg = para; n.cli = cli;
+      } catch (e) { console.error(e); falhas++; }
+    }
+    if (falhas) this.avisos.push(`${falhas} ${falhas === 1 ? 'andamento não foi levado' : 'andamentos não foram levados'} para ${para}; ${falhas === 1 ? 'ele continua' : 'eles continuam'} ligados a ${de} no SharePoint.`);
   }
 
   // Entrega de uma frente: é a demanda onde as ações da frente ficam penduradas.

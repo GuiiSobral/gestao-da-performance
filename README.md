@@ -67,6 +67,19 @@ Compromissos pontuais e de rotina: um passo só, com data marcada (ex.: solicita
 - Cumprimento dos últimos 90 dias por cliente e contraparte, pela data original.
 - A própria Solve é o cliente interno `SOL` (coluna `Interno` em `GP_Clientes`): aparece em Compromissos e fica fora da Carteira e dos seletores de cliente.
 
+## Acompanhamento (`GP_Acompanhamentos`)
+
+Lugar para registrar o que acontece durante a execução de uma ação ou de um compromisso: um retorno do cliente, um detalhe, um impedimento.
+
+- Quantos registros quiser em cada ação ou compromisso, cada um com data e hora, autor e código próprio (`<registro>-N01`, `-N02`…). Linha do tempo no detalhe do registro, do mais novo para o mais antigo. Enter grava; Shift+Enter quebra a linha.
+- Não muda status, prazo nem farol, não conta como movimentação e não entra na ata do fórum.
+- Cada pessoa edita e exclui só o que ela registrou. Editar e excluir têm **Desfazer** por 6 segundos; excluir vai para a lixeira do site e o desfazer recria com o mesmo código, data e autor. O histórico de versões da lista guarda o texto anterior.
+- **Virar ação** (na ação) e **Virar compromisso** abrem o registro já preenchido com o texto do andamento, para o passo novo com dono e data entrar na gestão.
+- Compromisso que se repete mostra os andamentos de todas as vezes da série.
+- O último andamento aparece nas listas de Ações, Demandas, Minha semana, Compromissos e nos itens da pauta do fórum. A busca de Ações também procura no texto dos andamentos.
+- Trocar o cliente de uma ação ou compromisso leva os andamentos para o código novo.
+- A lista é criada pelo script `scripts/provisionar-acompanhamento.js`. Sem ela, o resto do app funciona e o detalhe mostra um aviso.
+
 ## Interface
 
 - Tema claro, escuro ou automático (segue o sistema), escolhido no rodapé do menu ou em **Conta** no celular; fica salvo no navegador.
