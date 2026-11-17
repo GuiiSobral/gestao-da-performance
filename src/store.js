@@ -45,6 +45,7 @@ export const TRATAMENTOS = ['Concluído', 'Repactuado', 'Cancelado', 'Encerrado'
 
 // Datas: o SharePoint guarda ao meio-dia UTC para não mudar de dia no fuso de Brasília.
 export const d10 = v => (v ? String(v).slice(0, 10) : null);
+const acaoAberta = a => a.status === 'Não iniciada' || a.status === 'Em andamento';
 export const toSP = d => (d ? `${d}T12:00:00Z` : undefined);
 export function hojeISO() {
   const n = new Date();
@@ -682,6 +683,22 @@ export class Store {
     return p ? this.forum(p.forum) : null;
   }
 
+  // Ações concluídas do cliente que nunca entraram na pauta de um fórum (fóruns cancelados não contam),
+  // concluídas a partir de "desde". O fórum informado (o que está sendo editado) não conta como já pautado.
+  concluidasSemForum(cli, desde, exceto) {
+    const validos = new Set(this.foruns.filter(f => f.cli === cli && f.situacao !== 'Cancelado' && f.id !== exceto).map(f => f.id));
+    const pautadas = new Set(this.pauta.filter(p => p.tipo === 'Ação' && validos.has(p.forum)).map(p => p.reg));
+    return this.acoes.filter(a => a.cli === cli && a.status === 'Concluída' && a.conclusao && (!desde || a.conclusao >= desde) && !pautadas.has(a.id))
+      .sort((a, b) => b.conclusao.localeCompare(a.conclusao) || a.id.localeCompare(b.id));
+  }
+  // Data inicial padrão da lista acima: o último fórum realizado do cliente ou, sem nenhum, 30 dias atrás.
+  desdeConcluidas(cli) {
+    const ult = this.foruns.filter(f => f.cli === cli && f.situacao === 'Realizado' && f.data).map(f => f.data).sort().pop();
+    if (ult) return ult;
+    const d = new Date(hojeISO() + 'T12:00:00Z'); d.setUTCDate(d.getUTCDate() - 30);
+    return d.toISOString().slice(0, 10);
+  }
+
   // Itens marcados como Não tratado em fóruns realizados que ainda não foram levados a outro fórum (fora os cancelados).
   naoTratados(cli, exceto) {
     const vivos = new Set(this.foruns.filter(f => f.cli === cli && f.situacao !== 'Cancelado' && f.id !== exceto).map(f => f.id));
@@ -707,7 +724,8 @@ export class Store {
       if (i.tipo === TOPICO && !String(i.assunto || '').trim()) continue;
       const k = this.chaveItem(i);
       if (vistos.has(k)) continue;
-      if (i.tipo === 'Ação') { const a = this.acao(i.reg); if (a && demSel.has(a.demanda)) { absorvidas.push(i.reg); continue; } }
+      // A demanda na pauta traz só as ações abertas dela: ação concluída escolhida à mão continua como item próprio.
+      if (i.tipo === 'Ação') { const a = this.acao(i.reg); if (a && acaoAberta(a) && demSel.has(a.demanda)) { absorvidas.push(i.reg); continue; } }
       vistos.add(k); out.push(i);
     }
     return { itens: out, absorvidas };
@@ -745,8 +763,11 @@ export class Store {
         usados.add(code);
         ordem++;
         const assunto = (i.tipo === TOPICO ? String(i.assunto || '').trim() : (i.tipo === 'Demanda' ? (this.demanda(i.reg) || {}).titulo : (this.acao(i.reg) || {}).acao) || i.assunto || '').slice(0, 255);
+        // Ação já concluída entra na pauta para o fórum tomar conhecimento: o item nasce tratado como Concluído.
+        const jaConcluida = i.tipo === 'Ação' && (this.acao(i.reg) || {}).status === 'Concluída';
         const f = { Title: code, ForumCodigo: fo.id, ClienteCodigo: fo.cli, Ordem: ordem, Tipo: i.tipo, RegistroCodigo: i.tipo === TOPICO ? undefined : i.reg,
-          Assunto: assunto, ResponsavelCodigo: i.resp || undefined, Origem: i.origem || origemPadrao, ItemAnterior: i.anterior || undefined };
+          Assunto: assunto, ResponsavelCodigo: i.resp || undefined, Origem: i.origem || origemPadrao, ItemAnterior: i.anterior || undefined,
+          Tratamento: jaConcluida ? 'Concluído' : undefined };
         const it = await this.be.create('GP_Pauta', strip(f));
         const p = this.itemPautaDe({ id: it.id, etag: it.etag, fields: f });
         this.pauta.push(p); criados.push(p);
@@ -905,7 +926,7 @@ export class Store {
     if (atuais.some(p => this.chaveItem(p) === this.chaveItem(item))) throw new Error('Este item já está na pauta');
     if (item.tipo === 'Ação') {
       const a = this.acao(item.reg);
-      const dem = a && atuais.find(p => p.tipo === 'Demanda' && p.reg === a.demanda);
+      const dem = a && acaoAberta(a) && atuais.find(p => p.tipo === 'Demanda' && p.reg === a.demanda);
       if (dem) throw new Error(`A demanda desta ação já está na pauta (item ${dem.ordem})`);
     }
     const max = atuais.reduce((m, p) => Math.max(m, p.ordem || 0), 0);
@@ -1066,7 +1087,10 @@ export class Store {
     L.push('', '*Pauta*');
     const itens = this.pautaDe(fo.id);
     itens.forEach((p, k) => {
-      const trat = p.trat === 'Não tratado' ? 'Não tratado, volta na próxima pauta' : (p.trat || 'Sem tratamento');
+      let trat = p.trat === 'Não tratado' ? 'Não tratado, volta na próxima pauta' : (p.trat || 'Sem tratamento');
+      // Ação que chegou ao fórum já concluída: a ata diz quando e por quem.
+      const ac = p.tipo === 'Ação' && p.trat === 'Concluído' && !p.eventos.length ? this.acao(p.reg) : null;
+      if (ac && ac.conclusao) trat = `Concluída em ${fmtBR(ac.conclusao)} (${this.nome(ac.resp)})`;
       L.push(`${k + 1}. ${this.tituloItem(p)} | ${trat}`);
       p.eventos.forEach(e => L.push(`   • ${this.linhaEvento(e)}`));
       if (p.nota) L.push(`   • ${p.nota.replace(/\n+/g, ' ')}`);

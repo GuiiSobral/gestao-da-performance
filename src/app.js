@@ -715,7 +715,17 @@ function pickerHtml(cli, f, sel, modo, exceto) {
       .sort((a, b) => (a.d.prioridade || 99) - (b.d.prioridade || 99) || a.d.titulo.localeCompare(b.d.titulo));
     return { nome, l };
   }).filter(g => g.l.length);
-  if (!grupos.length) return '<div class="empty small">Nenhum registro aberto com esses filtros.</div>';
+  // Ações concluídas que nunca passaram por um fórum: entram como item próprio, já tratadas como Concluído.
+  const conc = f.ft !== 'todas' ? [] : st.concluidasSemForum(cli, f.cs || st.desdeConcluidas(cli), exceto)
+    .filter(a => (!f.fr || a.resp === f.fr) && bate(a.acao + ' ' + a.id));
+  const linhaConc = a => {
+    const d = st.demanda(a.demanda), marcada = sel.acs.has(a.id);
+    const txt = `<span><span class="pk-t">${esc(a.acao)}</span><span class="meta"><span class="mono">${esc(a.id)}</span><span>${esc(st.nome(a.resp))}</span><span class="pill ok line">concluída em ${fmt(a.conclusao)}</span>${d ? `<span>${esc(d.titulo)}</span>` : ''}</span></span>`;
+    if (modo === 'check') return `<label class="pk-row"><input type="checkbox" data-pk="Ação" data-id="${esc(a.id)}"${marcada ? ' checked' : ''}>${txt}</label>`;
+    return `<div class="pk-row"><span style="flex:1;min-width:0">${txt}</span>${marcada ? '<span class="pill ok">na pauta</span>' : `<button type="button" class="btn sm" data-inc="Ação" data-id="${esc(a.id)}">Incluir</button>`}</div>`;
+  };
+  const blocoConc = conc.length ? `<div class="pk-grp label">Concluídas sem fórum · ${conc.length}</div>${conc.map(linhaConc).join('')}` : '';
+  if (!grupos.length) return blocoConc ? `<div class="pk">${blocoConc}</div>` : '<div class="empty small">Nenhum registro aberto com esses filtros.</div>';
   const linhaDem = ({ d, i }) => {
     const naPauta = sel.dems.has(d.id);
     const ab = sortAcoes(i.ab);
@@ -735,13 +745,14 @@ function pickerHtml(cli, f, sel, modo, exceto) {
     }).join('')}</div>` : '';
     return `<div class="pk-dem">${ctrl}${ab.length ? `<button type="button" class="btn sm ghost pk-x" data-cv="abrir" data-id="${esc(d.id)}" aria-expanded="${aberto}">${aberto ? 'Esconder ações' : `Ver ações (${ab.length})`}</button>` : ''}${acs}</div>`;
   };
-  return `<div class="pk">${grupos.map(g => `<div class="pk-grp label">${g.nome} · ${g.l.length}</div>${g.l.map(linhaDem).join('')}`).join('')}</div>`;
+  return `<div class="pk">${grupos.map(g => `<div class="pk-grp label">${g.nome} · ${g.l.length}</div>${g.l.map(linhaDem).join('')}`).join('')}${blocoConc}</div>`;
 }
 function filtrosPicker(f, cli, px) {
   const pes = st.pessoasPara(cli);
   return `<div class="toolbar"><input type="search" id="${px}Q" placeholder="Buscar demanda ou ação" value="${esc(f.q)}" aria-label="Buscar">
     <select id="${px}Ft" aria-label="Tipo"><option value="todas">Todos os tipos</option>${GRUPOS.map(([t, n]) => `<option value="${esc(t)}"${f.ft === t ? ' selected' : ''}>${n}</option>`).join('')}</select>
-    <select id="${px}Fr" aria-label="Responsável"><option value="">Qualquer responsável</option>${pes.map(p => `<option value="${esc(p.id)}"${f.fr === p.id ? ' selected' : ''}>${esc(p.nome)}</option>`).join('')}</select></div>`;
+    <select id="${px}Fr" aria-label="Responsável"><option value="">Qualquer responsável</option>${pes.map(p => `<option value="${esc(p.id)}"${f.fr === p.id ? ' selected' : ''}>${esc(p.nome)}</option>`).join('')}</select>
+    <label class="small muted" style="display:inline-flex;align-items:center;gap:6px">Concluídas sem fórum desde <input type="date" id="${px}Cs" value="${esc(f.cs || st.desdeConcluidas(cli))}" aria-label="Concluídas sem fórum desde"></label></div>`;
 }
 function topicoHtml(cli, f, px) {
   const sug = f.sug;
@@ -783,7 +794,7 @@ function renderConvocacao() {
 }
 // Inclui um tópico livre no rascunho (ou no fórum em andamento). Antes, aponta demanda aberta parecida.
 function tirarAcoesDaDemanda(itens, dem) {
-  const fora = itens.filter(i => i.tipo === 'Ação' && st.acao(i.reg) && st.acao(i.reg).demanda === dem);
+  const fora = itens.filter(i => i.tipo === 'Ação' && st.acao(i.reg) && st.acao(i.reg).demanda === dem && aberta(st.acao(i.reg)));
   return { itens: itens.filter(i => !fora.includes(i)), n: fora.length };
 }
 function cvToggle(tipo, id, marcar) {
@@ -1905,6 +1916,10 @@ function onChange(e) {
   if (id === 'selAll') { document.querySelectorAll('#view input[data-sel]').forEach(i => marcar(i, t.checked)); atualizarSel(); return; }
   if (t.dataset.pk && S.conv) { cvToggle(t.dataset.pk, t.dataset.id, t.checked); render(); focoPor(`[data-pk="${t.dataset.pk}"][data-id="${CSS.escape(t.dataset.id)}"]`); return; }
   if (t.dataset.cvp && S.conv) { const l = S.conv.conv, k = l.indexOf(t.dataset.cvp); if (t.checked && k < 0) l.push(t.dataset.cvp); if (!t.checked && k >= 0) l.splice(k, 1); S.conv.dirty = true; render(); focoPor(`[data-cvp="${CSS.escape(t.dataset.cvp)}"]`); return; }
+  if (id === 'pkCs' || id === 'inCs') {
+    const f = id.startsWith('pk') ? S.conv : S.incl;
+    f.cs = t.value || ''; id.startsWith('pk') ? render() : renderLayer(); focoPor('#' + id); return;
+  }
   if (['pkFt', 'pkFr', 'inFt', 'inFr'].includes(id)) {
     const f = id.startsWith('pk') ? S.conv : S.incl;
     f[id.endsWith('Ft') ? 'ft' : 'fr'] = t.value; id.startsWith('pk') ? render() : renderLayer(); focoPor('#' + id); return;

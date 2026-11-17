@@ -289,3 +289,47 @@ test('excluir o fórum que trouxe não tratados devolve esses itens para a próx
   await s.excluirForum(prox);
   assert.equal(s.naoTratados('MOE').length, 1);
 });
+
+// Ações concluídas que nunca passaram por um fórum podem ser pautadas para o fórum tomar conhecimento.
+test('concluídas sem fórum: listagem, pauta já tratada, sem absorção pela demanda e ata', async () => {
+  const fx = fixture();
+  fx.GP_Acoes.push(
+    acao('MOE-A010', 10, 'MOE-QC-01', { Status: 'Concluída', DataConclusao: '2026-10-25T12:00:00Z' }),
+    acao('MOE-A011', 11, 'MOE-PD-01', { Status: 'Concluída', DataConclusao: '2026-09-01T12:00:00Z' }),
+    acao('MOE-A012', 12, 'MOE-PD-01', { Status: 'Concluída', DataConclusao: '2026-10-28T12:00:00Z' }));
+  fx.GP_Pauta.push(F('1', { Title: 'MOE-FO-20261001-P01', ForumCodigo: 'MOE-FO-20261001', ClienteCodigo: 'MOE', Ordem: 1, Tipo: 'Ação', RegistroCodigo: 'MOE-A012', Tratamento: 'Concluído' }));
+  const be = new MemoryBackend(fx);
+  const s = new Store(be, { name: 'Guilherme' });
+  await s.load();
+  // A012 já foi pautada; A011 é anterior à data; o padrão é o último fórum realizado (01/10).
+  assert.deepEqual(s.concluidasSemForum('MOE', '2026-10-01').map(a => a.id), ['MOE-A010']);
+  assert.deepEqual(s.concluidasSemForum('MOE', '').map(a => a.id), ['MOE-A010', 'MOE-A011']);
+  // A demanda na pauta não engole a ação concluída escolhida à mão.
+  const { itens } = s.normalizarPauta([{ tipo: 'Demanda', reg: 'MOE-QC-01' }, { tipo: 'Ação', reg: 'MOE-A010' }, { tipo: 'Ação', reg: 'MOE-A001' }]);
+  assert.deepEqual(itens.map(i => i.reg), ['MOE-QC-01', 'MOE-A010']);
+  const fo = await s.convocarForum({ ...CONV, itens });
+  const it = s.pautaDe(fo.id).find(p => p.reg === 'MOE-A010');
+  assert.equal(it.trat, 'Concluído');
+  assert.equal(be.db.GP_Pauta.find(x => x.fields.RegistroCodigo === 'MOE-A010').fields.Tratamento, 'Concluído');
+  // Já pautada neste fórum: sai da lista, salvo quando é o próprio fórum em edição.
+  assert.deepEqual(s.concluidasSemForum('MOE', '2026-10-01').map(a => a.id), []);
+  assert.deepEqual(s.concluidasSemForum('MOE', '2026-10-01', fo.id).map(a => a.id), ['MOE-A010']);
+  await s.iniciarForum(fo, ['SOLVE-GUILHERME']);
+  await s.encerrarForum(fo);
+  assert.equal(it.trat, 'Concluído');
+  assert.ok(!s.naoTratados('MOE').some(p => p.reg === 'MOE-A010'));
+  assert.match(s.ataDoForum(fo), /Ação MOE-A010 \| Concluída em 25\/10 \(Ana\)/);
+});
+
+test('incluir ação concluída durante o fórum com a demanda dela na pauta', async () => {
+  const fx = fixture();
+  fx.GP_Acoes.push(acao('MOE-A010', 10, 'MOE-QC-01', { Status: 'Concluída', DataConclusao: '2026-10-25T12:00:00Z' }));
+  const be = new MemoryBackend(fx);
+  const s = new Store(be, { name: 'Guilherme' });
+  await s.load();
+  const fo = await s.convocarForum({ ...CONV, itens: [{ tipo: 'Demanda', reg: 'MOE-QC-01' }] });
+  await s.iniciarForum(fo, ['SOLVE-GUILHERME']);
+  await assert.rejects(() => s.incluirNaPauta(fo, { tipo: 'Ação', reg: 'MOE-A001' }), /demanda desta ação já está na pauta/);
+  const p = await s.incluirNaPauta(fo, { tipo: 'Ação', reg: 'MOE-A010' });
+  assert.equal(p.trat, 'Concluído');
+});
