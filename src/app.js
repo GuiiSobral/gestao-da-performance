@@ -1,6 +1,6 @@
 // Interface da Gestão da Performance (mesmas telas do protótipo aprovado), lendo e gravando nas Listas do SharePoint.
 import { AREAS, hojeISO, lerLinha, TIPOS_COMP, TIPOS_DEM, REPETICOES, TOPICO, normTxt, MAX_ACOMP } from './store.js';
-import { aplicarTema, temaHtml } from './theme.js';
+import { alternarTema, botaoTema } from './theme.js';
 import { montarRelatorio, baixarPdf, baixarExcel } from './exportar.js';
 
 let st = null;          // Store
@@ -26,7 +26,7 @@ function addDays(i, n) { const d = dt(i); d.setDate(d.getDate() + n); return d.t
 const diff = (a, b) => Math.round((dt(a) - dt(b)) / 86400000);
 const plural = (n, s, p) => (n === 1 ? s : p);
 const aberta = a => a.status === 'Em andamento' || a.status === 'Não iniciada';
-const FAROL = { bad: 'Farol vermelho', warn: 'Farol amarelo', good: 'Farol verde', off: 'Encerrada' };
+const FAROL = { bad: 'Farol crítico', warn: 'Farol de atenção', good: 'Farol em dia', off: 'Encerrada' };
 const SEV = { bad: 0, warn: 1, good: 2, off: 3 };
 const store = () => st;
 const cliNome = code => { const c = st.cliente(code); return c ? c.nome : code; };
@@ -103,7 +103,7 @@ const pill = s => `<span class="pill ${s.k}${s.line ? ' line' : ''}">${esc(s.t)}
 const SHAPE = {
   bad: '<circle cx="6" cy="6" r="5.2"/>',
   warn: '<path d="M6 .8 11.4 10.9H.6Z"/>',
-  good: '<circle cx="6" cy="6" r="5.2"/><path d="M3.4 6.2 5.3 8l3.3-3.6" fill="none" style="stroke:var(--surface)" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>',
+  good: '<circle cx="6" cy="6" r="5.2"/><path d="M3.4 6.2 5.3 8l3.3-3.6" fill="none" style="stroke:var(--surf)" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>',
   off: '<circle cx="6" cy="6" r="4.4" fill="none" stroke="currentColor" stroke-width="1.6"/>'
 };
 const dot = (k, t) => `<svg class="dot ${k}" viewBox="0 0 12 12" width="12" height="12" role="img" aria-label="${esc(t || FAROL[k] || '')}"><title>${esc(t || FAROL[k] || '')}</title>${SHAPE[k] || SHAPE.off}</svg>`;
@@ -170,20 +170,31 @@ function sortAcoes(list) {
   });
 }
 
-let toastT, toastUndo = null, buscaT;
+let toastT, alertT, toastUndo = null, buscaT;
 // Aviso de sucesso (some sozinho; com "Desfazer" fica 6 s) e alerta de erro (fica até a pessoa fechar).
 function toast(msg, erro, undo) {
   if (erro) {
+    // Erro: some sozinho em 7 s, mas espera enquanto a pessoa está com o mouse ou o foco nele.
     const a = $('#alert');
     $('#alertMsg').textContent = msg; a.hidden = false;
+    clearTimeout(alertT);
+    const some = () => { alertT = setTimeout(() => { if (a.matches(':hover, :focus-within')) some(); else a.hidden = true; }, 7000); };
+    some();
     return;
   }
   const t = $('#toast'), b = $('#toastAct');
+  t.classList.remove('carregando');
   $('#toastMsg').textContent = msg; t.hidden = false;
   toastUndo = undo || null; b.hidden = !undo;
-  clearTimeout(toastT); toastT = setTimeout(() => { t.hidden = true; toastUndo = null; }, undo ? 6000 : 2800);
+  clearTimeout(toastT); toastT = setTimeout(() => { t.hidden = true; toastUndo = null; }, undo ? 6000 : 3500);
 }
-function fecharToast() { clearTimeout(toastT); $('#toast').hidden = true; toastUndo = null; }
+// Aviso "Carregando…" com girador, até a próxima mensagem ou fecharToast().
+function carregando(msg) {
+  const t = $('#toast');
+  clearTimeout(toastT); toastUndo = null; $('#toastAct').hidden = true;
+  $('#toastMsg').textContent = msg || 'Carregando…'; t.classList.add('carregando'); t.hidden = false;
+}
+function fecharToast() { clearTimeout(toastT); const t = $('#toast'); t.hidden = true; t.classList.remove('carregando'); toastUndo = null; }
 async function copiar(text, el) {
   try { await navigator.clipboard.writeText(text); toast('Texto copiado'); }
   catch (e) { if (el) { el.focus(); el.select(); } toast('Selecionei o texto: use Ctrl+C para copiar'); }
@@ -234,33 +245,82 @@ function lerHash() {
 // Atualiza o endereço sem criar uma entrada nova no histórico (usado ao mexer em filtros).
 function syncHash() { const h = hashDe(route()); if (location.hash !== h) history.replaceState(null, '', h); }
 
+// Ícones de contorno (grade 24, traço 2), cor herdada.
+const IC = {
+  carteira: '<rect x="3" y="7" width="18" height="13" rx="2"/><path d="M9 7V5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2M3 13h18"/>',
+  visao: '<path d="M4 20V11M10 20V4M16 20v-6M21 20H3"/>',
+  demandas: '<path d="M9 6h11M9 12h11M9 18h11M4.5 6h.01M4.5 12h.01M4.5 18h.01"/>',
+  acoes: '<path d="m9 11 3 3L21 5"/><path d="M20 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h10"/>',
+  forum: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/>',
+  semana: '<rect x="3" y="4" width="18" height="17" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/>',
+  agenda: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+  mais: '<circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/>',
+  sair: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/>',
+  listas: '<path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6M15 3h6v6M10 14 21 3"/>',
+  seta: '<path d="m6 9 6 6 6-6"/>'
+};
+const ic = (k, cls) => `<svg viewBox="0 0 24 24" aria-hidden="true"${cls ? ` class="${cls}"` : ''}>${IC[k]}</svg>`;
+// Abas da faixa de marca. No celular viram a navegação inferior: as marcadas com "cel" ficam nela; as outras vão para "Mais".
+const ABAS = [
+  ['carteira', 'Carteira', 'Carteira', false],
+  ['visao', 'Visão geral', 'Visão', true],
+  ['demandas', 'Demandas', 'Demandas', false],
+  ['acoes', 'Ações', 'Ações', true, 'cntAb'],
+  ['forum', 'Fórum', 'Fórum', true],
+  ['semana', 'Minha semana', 'Semana', true],
+  ['agenda', 'Compromissos', 'Compromissos', false, 'cntComp']
+];
+const MAIS = ABAS.filter(a => !a[3]).map(a => a[0]);
+
 function shell() {
+  const aba = ([r, longo, curto, cel, cnt]) => `<a href="#${r}" data-r="${r}" class="${cel ? 'cel' : 'pc'}">${ic(r)}<span class="lg">${longo}</span><span class="cu">${curto}</span>${cnt ? `<span class="cnt" id="${cnt}"></span>` : ''}</a>`;
   $('#root').innerHTML = `
   <div class="app">
-    <aside class="rail">
-      <div class="brand"><b>Gestão da Performance</b><span>Solve Group</span></div>
-      <nav class="nav" id="nav" aria-label="Seções">
-        <a href="#carteira" data-r="carteira">Carteira</a>
-        <div class="grp label" id="grpCli">Cliente</div>
-        <label class="clisel" id="cliWrap"><span class="sr">Cliente</span><select id="selCli"></select></label>
-        <a href="#visao" data-r="visao">Visão geral</a>
-        <a href="#demandas" data-r="demandas">Demandas</a>
-        <a href="#acoes" data-r="acoes">Ações <span class="cnt" id="cntAb"></span></a>
-        <a href="#forum" data-r="forum">Fórum</a>
-        <div class="grp label">Pessoas</div>
-        <a href="#semana" data-r="semana">Minha semana</a>
-        <a href="#agenda" data-r="agenda">Compromissos <span class="cnt" id="cntComp"></span></a>
+    <header class="topo">
+      <a class="marca" href="#visao" aria-label="Gestão da Performance, Solve: ir para a Visão geral"><b>Solve</b><span>Gestão da Performance</span></a>
+      <nav class="abas" id="nav" aria-label="Seções">
+        ${ABAS.map(aba).join('')}
+        <div class="grupo" id="mais">
+          <button type="button" class="mais-btn" id="maisBtn" aria-expanded="false" aria-controls="maisMenu">${ic('mais')}<span class="cu">Mais</span><span class="cnt" id="cntMais"></span></button>
+          <div class="grupo-menu" id="maisMenu" hidden>${ABAS.filter(a => !a[3]).map(([r, longo]) => `<a href="#${r}" data-r="${r}">${ic(r)}<span>${longo}</span></a>`).join('')}</div>
+        </div>
       </nav>
-      <div class="railnote" id="railnote"></div>
-    </aside>
+      <div class="topo-dir">
+        <span class="usuario" id="usuario"></span>
+        ${ctx.listUrl ? `<a class="icobtn" href="${esc(ctx.listUrl)}" target="_blank" rel="noopener" aria-label="Abrir as listas no SharePoint" title="Listas no SharePoint">${ic('listas')}</a>` : ''}
+        <button type="button" class="icobtn" data-do="tema" id="btnTema"></button>
+        ${ctx.logout ? `<button type="button" class="icobtn" data-do="sair" aria-label="Sair" title="Sair">${ic('sair')}</button>` : ''}
+      </div>
+    </header>
     <main>
       <div class="top">
-        <div class="ttl"><div class="label" id="eyebrow"></div><h1 id="ttl"></h1></div>
-        <div class="chips"><details class="acct" id="acct"><summary class="btn">Conta</summary><div class="acct-menu" id="acctMenu"></div></details><button class="btn" data-do="recarregar" id="btnSync" title="Ler de novo as listas do SharePoint">Atualizar</button><button class="btn" data-do="novoComp" title="Compromisso pontual ou de rotina: um passo só, com data">+ Compromisso</button><button class="btn primary" data-do="capturar">+ Nova ação</button></div>
+        <div class="ttl">
+          <div class="trilha" id="eyebrow"></div>
+          <h1 id="ttl"></h1>
+          <div class="atualizado" id="atualizado"></div>
+        </div>
+        <div class="top-acoes">
+          <label class="clisel" id="cliWrap"><span>Cliente</span><select id="selCli"></select></label>
+          <div class="chips"><button class="btn" data-do="novoComp" title="Compromisso pontual ou de rotina: um passo só, com data">+ Compromisso</button><button class="btn primary" data-do="capturar">+ Nova ação</button></div>
+        </div>
       </div>
       <div id="view" class="view"></div>
     </main>
   </div>`;
+}
+function abrirMais(abrir) {
+  const b = $('#maisBtn'), m = $('#maisMenu'); if (!b || !m) return;
+  b.setAttribute('aria-expanded', String(!!abrir)); m.hidden = !abrir;
+}
+// "Dados atualizados": quando as listas foram lidas. Ponto em atenção se a leitura passou de 26 h.
+function linhaAtualizado() {
+  const t = st.loadedAt;
+  if (!t) return '<i aria-hidden="true"></i><span>Dados ainda não lidos</span>';
+  const dia = diaLocal(t.toISOString()), hora = t.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Fortaleza' });
+  const quando = dia === HOJE ? `hoje às ${hora}` : dia === addDays(HOJE, -1) ? `ontem às ${hora}` : `${fmtF(dia)}, ${hora}`;
+  const velho = Date.now() - t.getTime() > 26 * 3600000;
+  return `<i aria-hidden="true"${velho ? ' class="velho"' : ''}></i><span>Dados do SharePoint lidos ${quando}</span>
+    <button type="button" class="linkbtn" data-do="recarregar" id="btnSync" title="Ler de novo as listas do SharePoint">Atualizar</button>`;
 }
 
 function render() {
@@ -271,21 +331,25 @@ function render() {
   const sel = $('#selCli');
   const tod = todosAtivo();
   sel.innerHTML = (COM_TODOS.includes(r) ? `<option value="todos"${tod ? ' selected' : ''}>Todos os clientes</option>` : '') + clientesOrd().map(c => `<option value="${esc(c.id)}"${!tod && c.id === S.cli ? ' selected' : ''}>${esc(c.nome)}${st.temDados(c.id) ? '' : ' (a migrar)'}</option>`).join('');
-  $('#cliWrap').hidden = !!R.global; $('#grpCli').hidden = !!R.global; sel.disabled = !!R.global;
-  $('#eyebrow').textContent = R.global ? 'Solve Group' : tod ? 'Todos os clientes' : cliNome(S.cli);
+  // Ações e Demandas têm o cliente na própria barra de filtros (com "Todos os clientes").
+  $('#cliWrap').hidden = !!R.global || COM_TODOS.includes(r); sel.disabled = !!R.global;
+  $('#eyebrow').textContent = R.global ? 'Solve Group' : 'Solve Group · ' + (tod ? 'Todos os clientes' : cliNome(S.cli));
   $('#ttl').textContent = R.t;
+  document.title = `${R.t} · Gestão da Performance`;
   document.querySelectorAll('#nav a').forEach(a => { if (a.dataset.r === r) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); });
+  $('#maisBtn').classList.toggle('ativo', MAIS.includes(r));
+  abrirMais(false);
   $('#cntAb').textContent = S.cli ? M(acoesEsc()).ab : '';
   const eu = st.eu();
   const urg = eu ? st.compromissos.filter(c => c.resp === eu.id && c.status === 'Pendente' && c.data && c.data <= HOJE).length : 0;
   $('#cntComp').textContent = urg || '';
-  const hora = st.loadedAt ? st.loadedAt.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '—';
-  const conta = suf => `<b>${esc(st.user.name || '')}</b>${eu ? '' : '<span class="small">sem cadastro em Pessoas</span>'}
-    <span>Dados do SharePoint lidos às ${hora}</span>
-    <span class="label">Tema</span>${temaHtml(suf)}
-    <span class="row-actions">${ctx.listUrl ? `<a class="btn sm ghost" href="${esc(ctx.listUrl)}" target="_blank" rel="noopener">Listas no SharePoint</a>` : ''}${ctx.logout ? '<button class="btn sm ghost" data-do="sair">Sair</button>' : ''}</span>`;
-  $('#railnote').innerHTML = conta('rail');
-  $('#acctMenu').innerHTML = conta('menu');
+  $('#cntMais').textContent = urg || '';
+  const u = $('#usuario');
+  u.textContent = st.user.name || '';
+  u.title = eu ? (st.user.username || '') : 'Sem cadastro em GP_Pessoas';
+  const bt = botaoTema(), btn = $('#btnTema');
+  btn.innerHTML = bt.icone; btn.setAttribute('aria-label', bt.label); btn.title = bt.label;
+  $('#atualizado').innerHTML = linhaAtualizado();
   const focused = document.activeElement && document.activeElement.id;
   const pos = focused === 'fq' ? document.activeElement.selectionStart : null;
   st.forumAtivo = null;   // só a tela do fórum em andamento liga o registro de desdobramentos
@@ -310,7 +374,7 @@ function renderCarteira() {
     const fr = m.venc || sp ? 'bad' : (m.semp || m.v7) ? 'warn' : 'good';
     return `<tr class="click" data-cli-go="${esc(c.id)}"><td><span class="sem" role="img" aria-label="${FAROL[fr]}"><i class="${fr === 'bad' ? 'on bad' : ''}"></i><i class="${fr === 'warn' ? 'on warn' : ''}"></i><i class="${fr === 'good' ? 'on good' : ''}"></i></span></td>
       <td><button class="linkbtn" data-cli-go="${esc(c.id)}">${esc(c.nome)}</button><span class="sub">${c.consultor ? 'Consultor: ' + esc(st.nome(c.consultor)) : 'Sem consultor definido'}${c.supervisor ? ' · supervisão: ' + esc(st.nome(c.supervisor)) : ''}</span></td>
-      <td class="num">${m.ab}</td><td class="num" style="color:var(--bad);font-weight:600">${m.venc}</td><td class="num">${m.semp}</td><td class="num">${m.semDono}</td><td class="num">${sp}</td></tr>`;
+      <td class="num">${m.ab}</td><td class="num" style="color:var(--warn);font-weight:600">${m.venc}</td><td class="num">${m.semp}</td><td class="num">${m.semDono}</td><td class="num">${sp}</td></tr>`;
   }).join('');
   const exc = cart.filter(c => st.temDados(c.id)).flatMap(c => excecoes(c.id).map(e => ({ ...e, cli: c.id })));
   return `
@@ -318,11 +382,11 @@ function renderCarteira() {
     <div><span class="v">${cart.length}</span><span class="k">Clientes na carteira</span></div>
     <div><span class="v">${cart.filter(c => st.temDados(c.id)).length}<span class="muted" style="font-size:1rem"> / ${cart.length}</span></span><span class="k">Na nova base</span></div>
     <div><span class="v">${mt.ab}</span><span class="k">Ações abertas</span></div>
-    <div class="bad"><span class="v">${mt.venc}</span><span class="k">Vencidas</span></div>
+    <div class="${mt.venc ? 'bad' : ''}"><span class="v">${mt.venc}</span><span class="k">Vencidas</span></div>
   </div>
   <p class="small muted" style="margin:-10px 0 0">Para ver as ações de um cliente, clique no nome dele na tabela.</p>
   <div class="tablewrap"><table>
-    <thead><tr><th style="width:1%">Farol</th><th>Cliente</th><th>Abertas</th><th>Vencidas</th><th>Sem prazo</th><th>Sem dono nominal</th><th>Sem plano</th></tr></thead>
+    <thead><tr><th style="width:1%">Farol</th><th>Cliente</th><th class="num">Abertas</th><th class="num">Vencidas</th><th class="num">Sem prazo</th><th class="num">Sem dono nominal</th><th class="num">Sem plano</th></tr></thead>
     <tbody>${rows}</tbody></table></div>
   <section class="panel">
     <header><h2>Exceções que pedem decisão</h2><span class="small muted">gestão por exceção: só o que saiu da regra</span></header>
@@ -375,9 +439,9 @@ function renderVisao() {
   <p class="lede-sub">O atraso é calculado pelo prazo de cada ação, nunca digitado. Clique em qualquer número para ver as ações.</p></div>
   <div class="strip">
     <button data-sig="abertas"><span class="v">${m.ab}</span><span class="k">Abertas</span></button>
-    <button class="bad" data-sig="vencidas"><span class="v">${m.venc}</span><span class="k">Vencidas</span></button>
-    <button class="warn" data-sig="v7"><span class="v">${m.v7}</span><span class="k">Vencem em 7 dias</span></button>
-    <button class="warn" data-sig="semprazo"><span class="v">${m.semp}</span><span class="k">Sem prazo</span></button>
+    <button class="${m.venc ? 'bad' : ''}" data-sig="vencidas"><span class="v">${m.venc}</span><span class="k">Vencidas</span></button>
+    <button class="${m.v7 ? 'warn' : ''}" data-sig="v7"><span class="v">${m.v7}</span><span class="k">Vencem em 7 dias</span></button>
+    <button class="${m.semp ? 'warn' : ''}" data-sig="semprazo"><span class="v">${m.semp}</span><span class="k">Sem prazo</span></button>
     <button class="${m.semDono ? 'warn' : ''}" data-sig="semdono"><span class="v">${m.semDono}</span><span class="k">Sem dono nominal</span></button>
     <button data-sig="concluidas"><span class="v">${m.conc}</span><span class="k">Concluídas</span></button>
   </div>
@@ -387,21 +451,21 @@ function renderVisao() {
     </section>
     <section class="panel"><header><h2>Carga por responsável</h2><span class="small muted">ações abertas</span></header>
       ${cg.length ? `<div class="bars">${cg.map(([n, c]) => `<div class="bar"><button class="linkbtn nm" data-resp="${esc(n)}">${esc(st.nome(n))}</button><span class="track"><span class="fill" style="width:${c.v / cmax * 100}%"></span><span class="fill rest" style="width:${(c.t - c.v) / cmax * 100}%"></span></span><span class="n">${c.t}</span></div>`).join('')}</div>
-      <div class="legend"><span><i style="background:var(--bad)"></i>vencidas</span><span><i style="background:var(--off);opacity:.55"></i>no prazo ou sem prazo</span></div>` : '<div class="empty small">Nenhuma ação aberta.</div>'}
+      <div class="legend"><span><i style="background:var(--warn)"></i>vencidas</span><span><i style="background:var(--tm4)"></i>no prazo ou sem prazo</span></div>` : '<div class="empty small">Nenhuma ação aberta.</div>'}
     </section>
   </div>
   <div class="grid3">
     <section class="panel"><header><h2>Questões críticas</h2><span class="small muted">por prioridade definida no fórum</span></header>
       ${qcs.length ? `<div class="list">${qcs.map(({ d, i }) => `<div class="li">${dot(i.farol, FAROL[i.farol])}<div class="body">
         <button class="linkbtn" data-dem-go="${esc(d.id)}">${d.prioridade ? `<span class="prio">P${d.prioridade}</span> ` : ''}${esc(d.titulo)}</button>
-        <div class="meta"><span>${d.resp ? esc(st.nome(d.resp)) : 'sem dono nominal'}</span><span>${i.ab.length} ${plural(i.ab.length, 'ação aberta', 'ações abertas')}</span>${i.venc ? `<span style="color:var(--bad)">${i.venc} ${plural(i.venc, 'vencida', 'vencidas')}</span>` : ''}${i.status === 'Sem plano de ação' ? '<span class="pill bad">sem plano de ação</span>' : ''}${i.validar ? '<span class="pill acc">validar encerramento</span>' : ''}</div></div></div>`).join('')}</div>` : '<div class="empty small">Nenhuma questão crítica aberta.</div>'}
+        <div class="meta"><span>${d.resp ? esc(st.nome(d.resp)) : 'sem dono nominal'}</span><span>${i.ab.length} ${plural(i.ab.length, 'ação aberta', 'ações abertas')}</span>${i.venc ? `<span style="color:var(--warn)">${i.venc} ${plural(i.venc, 'vencida', 'vencidas')}</span>` : ''}${i.status === 'Sem plano de ação' ? '<span class="pill bad">sem plano de ação</span>' : ''}${i.validar ? '<span class="pill acc">validar encerramento</span>' : ''}</div></div></div>`).join('')}</div>` : '<div class="empty small">Nenhuma questão crítica aberta.</div>'}
     </section>
     <div class="stack">
       <section class="panel"><header><h2>Sinais de gestão</h2></header>
         <div class="signals">
-          <button class="signal" data-sig="repact"><b style="color:var(--bad)">${m.repVenc}</b><span>${plural(m.repVenc, 'ação reprogramada venceu de novo', 'ações reprogramadas venceram de novo')}</span></button>
+          <button class="signal" data-sig="repact"><b${m.repVenc ? ' style="color:var(--warn)"' : ''}>${m.repVenc}</b><span>${plural(m.repVenc, 'ação reprogramada venceu de novo', 'ações reprogramadas venceram de novo')}</span></button>
           ${pf ? `<button class="signal" data-sig="solvefez"><b>${pf}</b><span>${plural(pf, 'ação cancelada porque', 'ações canceladas porque')} a Solve executou a tarefa do cliente</span></button>` : ''}
-          <button class="signal" data-go="demandas" data-fd="semplano"><b style="color:var(--bad)">${sp}</b><span>demandas e frentes sem plano de ação ativo</span></button>
+          <button class="signal" data-go="demandas" data-fd="semplano"><b${sp ? ' style="color:var(--warn)"' : ''}>${sp}</b><span>demandas e frentes sem plano de ação ativo</span></button>
           <button class="signal" data-go="demandas" data-fd="validar"><b>${nval}</b><span>${plural(nval, 'demanda com todas as ações fechadas, para validar o encerramento', 'demandas com todas as ações fechadas, para validar o encerramento')}</span></button>
         </div>
       </section>
@@ -473,8 +537,8 @@ function demRow(d, i, comCli) {
   return `<div class="dem" id="dem-${esc(d.id)}">
     <button data-dem="${esc(d.id)}" aria-expanded="${open}">${dot(i.farol, FAROL[i.farol])}
       <span style="min-width:0"><span class="t">${d.prioridade ? `<span class="prio">P${d.prioridade}</span> ` : ''}${esc(d.titulo)}</span>
-        <span class="m">${comCli ? `<span class="tag${st.interno(d.cli) ? ' solve' : ''}" title="${esc(cliNome(d.cli))}">${esc(d.cli)}</span>` : ''}<span class="tag">${esc(d.tipo)}</span>${fr ? `<span>${esc(fr.nome)}</span>` : ''}<span>${d.resp ? esc(st.nome(d.resp)) : '<b style="color:var(--bad)">sem dono nominal</b>'}</span>
-        ${i.ac.length ? `<span>${i.conc}/${naoCanc} concluídas</span>` : ''}${i.venc ? `<span style="color:var(--bad);font-weight:600">${i.venc} ${plural(i.venc, 'vencida', 'vencidas')}</span>` : ''}${i.semp ? `<span style="color:var(--warn)">${i.semp} sem prazo</span>` : ''}
+        <span class="m">${comCli ? `<span class="tag${st.interno(d.cli) ? ' solve' : ''}" title="${esc(cliNome(d.cli))}">${esc(d.cli)}</span>` : ''}<span class="tag">${esc(d.tipo)}</span>${fr ? `<span>${esc(fr.nome)}</span>` : ''}<span>${d.resp ? esc(st.nome(d.resp)) : '<b style="color:var(--warn)">sem dono nominal</b>'}</span>
+        ${i.ac.length ? `<span>${i.conc}/${naoCanc} concluídas</span>` : ''}${i.venc ? `<span style="color:var(--warn);font-weight:600">${i.venc} ${plural(i.venc, 'vencida', 'vencidas')}</span>` : ''}${i.semp ? `<span style="color:var(--warn-ink)">${i.semp} sem prazo</span>` : ''}
         ${d.nota ? '<span class="pill warn">nota da migração</span>' : ''}</span></span>
       <span class="r">${stPill}</span>
     </button>
@@ -490,7 +554,7 @@ function demRow(d, i, comCli) {
 }
 
 /* ---------- seletor de cliente nas barras de filtro ---------- */
-// Ações e Demandas: mesmo valor do seletor lateral, com "Todos os clientes".
+// Ações e Demandas: mesmo valor do seletor do topo, com "Todos os clientes".
 function filtroCliHtml() {
   const cs = clientesOrd().filter(c => naCarteira(c.id) && st.temDados(c.id));
   if (S.cli && !cs.some(c => c.id === S.cli) && st.cliente(S.cli)) cs.unshift(st.cliente(S.cli));
@@ -559,7 +623,7 @@ function renderAcoes() {
   </div>
   <div class="small muted">${list.length} ${plural(list.length, 'ação', 'ações')}${todos ? ` de ${nCli} ${plural(nCli, 'cliente', 'clientes')} · números somados da carteira` : ''} · ordenadas pela urgência: vencidas primeiro, pelo maior atraso</div>
   <div class="tablewrap"><table class="cards">
-    <thead><tr><th class="c-sel"><label class="selbox" title="Marcar todas as ações da lista"><input type="checkbox" id="selAll" aria-label="Marcar todas as ações da lista"${list.length ? '' : ' disabled'}></label></th><th>Código</th><th>Ação</th><th>Demanda</th><th>Responsável</th><th>Prazo</th><th>Situação</th></tr></thead>
+    <thead><tr><th class="c-sel"><label class="selbox" title="Marcar todas as ações da lista"><input type="checkbox" id="selAll" aria-label="Marcar todas as ações da lista"${list.length ? '' : ' disabled'}></label></th><th>Código</th><th>Ação</th><th>Demanda</th><th>Responsável</th><th class="num">Prazo</th><th>Situação</th></tr></thead>
     <tbody>${list.length ? list.map(a => { const d = st.demanda(a.demanda); return `<tr class="click${S.sel.has(a.id) ? ' marcada' : ''}" data-acao="${esc(a.id)}">
       <td class="c-sel"><label class="selbox"><input type="checkbox" data-sel="${esc(a.id)}" aria-label="Marcar ${esc(a.id)} para exportar"${S.sel.has(a.id) ? ' checked' : ''}></label></td>
       <td class="c-id" data-l="Código">${esc(a.id)}</td>
@@ -1036,7 +1100,7 @@ function renderAgenda() {
   <div class="grid3">
     <div class="stack">${corpo}</div>
     <section class="panel"><header><h2>Cumprimento</h2><span class="small muted">últimos 90 dias${tot.t ? ` · ${Math.round(tot.dia * 100 / tot.t)}% no dia` : ''}</span></header>
-      ${cp.length ? `<div style="overflow-x:auto"><table class="mini"><thead><tr><th>Com quem</th><th class="num">No dia</th><th class="num" title="Feito com atraso, não ocorreu ou ainda atrasado">Falhou</th><th class="num">%</th></tr></thead><tbody>${cp.slice(0, 12).map(x => `<tr><td>${tagCli(x.cli)} ${esc(x.contra ? st.nome(x.contra) : 'sem contraparte')}<span class="sub" style="display:block;color:var(--muted);font-size:.78rem">${x.t} no período${x.atr ? ` · ${x.atr} com atraso` : ''}${x.nao ? ` · ${x.nao} não ${plural(x.nao, 'ocorreu', 'ocorreram')}` : ''}${x.pend ? ` · ${x.pend} ${plural(x.pend, 'atrasado', 'atrasados')}` : ''}</span></td><td class="num">${x.dia}</td><td class="num">${x.t - x.dia}</td><td class="num" style="${x.pct < 70 ? 'color:var(--bad);font-weight:600' : ''}">${x.pct}%</td></tr>`).join('')}</tbody></table></div>` : '<div class="empty small">O cumprimento aparece quando os primeiros compromissos chegarem à data.</div>'}
+      ${cp.length ? `<div style="overflow-x:auto"><table class="mini"><thead><tr><th>Com quem</th><th class="num">No dia</th><th class="num" title="Feito com atraso, não ocorreu ou ainda atrasado">Falhou</th><th class="num">%</th></tr></thead><tbody>${cp.slice(0, 12).map(x => `<tr><td>${tagCli(x.cli)} ${esc(x.contra ? st.nome(x.contra) : 'sem contraparte')}<span class="sub" style="display:block;color:var(--muted);font-size:.78rem">${x.t} no período${x.atr ? ` · ${x.atr} com atraso` : ''}${x.nao ? ` · ${x.nao} não ${plural(x.nao, 'ocorreu', 'ocorreram')}` : ''}${x.pend ? ` · ${x.pend} ${plural(x.pend, 'atrasado', 'atrasados')}` : ''}</span></td><td class="num">${x.dia}</td><td class="num">${x.t - x.dia}</td><td class="num" style="${x.pct < 70 ? 'color:var(--warn);font-weight:600' : ''}">${x.pct}%</td></tr>`).join('')}</tbody></table></div>` : '<div class="empty small">O cumprimento aparece quando os primeiros compromissos chegarem à data.</div>'}
       <p class="small muted" style="margin:10px 0 0">Conta pela data original: remarcar e fazer depois conta como atraso.</p>
     </section>
   </div>`;
@@ -1090,7 +1154,7 @@ function porResponsavel(pes, ab, compAb, eu) {
     const atrC = compAb.filter(x => x.resp === n && sitComp(x).o === 1).length;
     const v = o(1);
     return `<tr><td><button class="linkbtn" data-semp="${esc(n)}" title="Ver a semana de ${esc(st.nome(n))}">${esc(st.nome(n))}</button>${eu && n === eu.id ? ' <span class="pill acc">você</span>' : ''}<span class="sub" style="display:block;color:var(--muted);font-size:.78rem">${k ? `${k} ${plural(k, 'compromisso', 'compromissos')}${atrC ? ` · ${atrC} ${plural(atrC, 'atrasado', 'atrasados')}` : ''}` : 'sem compromisso'}</span></td>
-      <td class="num" style="${v ? 'color:var(--bad);font-weight:600' : ''}">${v}</td><td class="num">${o(2)}</td><td class="num">${o(3)}</td><td class="num">${c}</td></tr>`;
+      <td class="num" style="${v ? 'color:var(--warn);font-weight:600' : ''}">${v}</td><td class="num">${o(2)}</td><td class="num">${o(3)}</td><td class="num">${c}</td></tr>`;
   }).join('');
   return `<section class="panel"><header><h2>Por responsável</h2><span class="small muted">${pes.length} ${plural(pes.length, 'pessoa', 'pessoas')}</span></header>
     <div style="overflow-x:auto"><table class="mini resp-tab"><thead><tr><th>Pessoa</th><th class="num" title="Ações vencidas">Venc.</th><th class="num" title="Vencem até ${fmt(LIM7)}">7 d</th><th class="num" title="Ações sem prazo">S/ prazo</th><th class="num" title="Todas as ações abertas">Total</th></tr></thead><tbody>${linhas}</tbody></table></div>
@@ -1174,7 +1238,7 @@ function compDrawerHtml() {
       <div class="full small muted">${c.rec !== 'Única' ? 'Vale para esta vez e para as próximas da série, que são criadas a partir desta. ' : ''}A data e o cumprimento não mudam.</div>
       <div class="full row-actions"><button class="btn primary" type="submit">Salvar responsável</button><button class="btn" type="button" data-do="modo" data-m="">Voltar</button><span class="small err-text" id="tErr" role="alert"></span></div></form>`;
   return `<aside class="drawer" role="dialog" aria-modal="true" aria-labelledby="dwT">
-    <div class="dh"><div style="min-width:0"><div class="label mono">${esc(c.id)} · ${esc(cliNome(c.cli))}</div><h2 id="dwT" tabindex="-1" style="margin-top:4px">${esc(c.oque)}</h2><div style="margin-top:8px" class="row-actions">${pill(s)}<span class="pill ok">${esc(c.status)}</span>${sugerePendencia(c) ? '<span class="pill acc">virar pendência?</span>' : ''}</div></div><button class="btn sm ghost xbtn" data-do="fechar" aria-label="Fechar">✕</button></div>
+    <div class="dh"><div style="min-width:0"><div class="label mono">${esc(c.id)} · ${esc(cliNome(c.cli))}</div><h2 id="dwT" tabindex="-1" style="margin-top:4px">${esc(c.oque)}</h2><div style="margin-top:8px" class="row-actions">${pill(s)}<span class="pill ok">${esc(c.status)}</span>${sugerePendencia(c) ? '<span class="pill acc">virar pendência?</span>' : ''}</div></div><button class="btn sm" data-do="fechar">Fechar</button></div>
     <div class="db">
       <dl class="w5">
         <dt>O QUÊ</dt><dd>${esc(c.oque)} <span class="tag">${esc(c.tipo)}</span></dd>
@@ -1184,7 +1248,7 @@ function compDrawerHtml() {
         <dt>REPETE</dt><dd>${c.rec === 'Única' ? 'Não' : c.rec + (aberto ? ` · a próxima é criada ao fechar esta (${fmt(st.proximaDe(c))})` : '')}</dd>
       </dl>
       ${!modo ? `<div class="row-actions"><button class="btn sm" data-do="modo" data-m="editar">Editar</button>${aberto ? `<button class="btn sm ghost" data-do="modo" data-m="cliente">Trocar cliente</button>` : ''}</div>` : ''}
-      ${c.demanda ? `<div class="panel" style="padding:12px;background:var(--surface-2)"><div class="label">Virou pendência</div><button class="linkbtn" data-dem-go="${esc(c.demanda)}" data-cli-set="${esc(c.cli)}" style="margin-top:4px">${esc(st.demanda(c.demanda) ? st.demanda(c.demanda).titulo : c.demanda)}</button></div>` : ''}
+      ${c.demanda ? `<div class="panel" style="padding:12px;background:var(--surf2)"><div class="label">Virou pendência</div><button class="linkbtn" data-dem-go="${esc(c.demanda)}" data-cli-set="${esc(c.cli)}" style="margin-top:4px">${esc(st.demanda(c.demanda) ? st.demanda(c.demanda).titulo : c.demanda)}</button></div>` : ''}
       <form id="fRes" class="form"><div class="field full"><label for="cRes">Resultado${aberto ? ' (opcional, gravado ao fechar)' : ''}</label><textarea id="cRes" maxlength="2000" placeholder="Ex.: Layra enviou só o PIS; COFINS fica para segunda">${esc(c.resultado)}</textarea></div>
         ${aberto ? '' : '<div class="full row-actions"><button class="btn sm" type="submit">Salvar resultado</button></div>'}</form>
       ${acompHtml('comp', c, modo)}
@@ -1237,7 +1301,7 @@ function drawerHtml() {
       <div class="field full"><label for="cMot">Por que cancelar?</label><input type="text" id="cMot" required placeholder="Ex.: substituída por outra ação"></div>
       <div class="full row-actions"><button class="btn danger" type="submit">Cancelar ação</button><button class="btn" type="button" data-do="modo" data-m="">Voltar</button><span class="small err-text" id="cErr" role="alert"></span></div></form>`;
   return `<aside class="drawer" role="dialog" aria-modal="true" aria-labelledby="dwT">
-    <div class="dh"><div style="min-width:0"><div class="label mono">${esc(a.id)} · ${esc(cliNome(a.cli))}</div><h2 id="dwT" tabindex="-1" style="margin-top:4px">${esc(a.acao)}</h2><div style="margin-top:8px" class="row-actions">${pill(s)}<span class="pill ok">${esc(a.status)}</span></div></div><button class="btn sm ghost xbtn" data-do="fechar" aria-label="Fechar">✕</button></div>
+    <div class="dh"><div style="min-width:0"><div class="label mono">${esc(a.id)} · ${esc(cliNome(a.cli))}</div><h2 id="dwT" tabindex="-1" style="margin-top:4px">${esc(a.acao)}</h2><div style="margin-top:8px" class="row-actions">${pill(s)}<span class="pill ok">${esc(a.status)}</span></div></div><button class="btn sm" data-do="fechar">Fechar</button></div>
     <div class="db">
       <dl class="w5">
         <dt>O QUÊ</dt><dd>${esc(a.acao)}</dd>
@@ -1249,7 +1313,7 @@ function drawerHtml() {
         <dt>QUANTO</dt><dd>${a.quanto !== null && a.quanto !== undefined ? 'R$ ' + Number(a.quanto).toLocaleString('pt-BR', { minimumFractionDigits: 2 }) : '<span class="muted">Não registrado</span>'}</dd>
       </dl>
       ${!modo ? `<div class="row-actions"><button class="btn sm" data-do="modo" data-m="editar">Editar</button>${aberta(a) ? '<button class="btn sm ghost" data-do="modo" data-m="cliente">Trocar cliente</button>' : ''}</div>` : ''}
-      <div class="panel" style="padding:12px;background:var(--surface-2)"><div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><div class="label">Demanda</div>${!modo ? '<button class="btn sm ghost" data-do="modo" data-m="mover">Mover</button>' : ''}</div><button class="linkbtn" data-dem-go="${esc(d ? d.id : '')}" style="margin-top:4px">${esc(d ? d.titulo : a.demanda)}</button><div class="small muted">${esc(d ? d.tipo : '')}${fr ? ` · frente ${esc(fr.nome)}` : ''}</div></div>
+      <div class="panel" style="padding:12px;background:var(--surf2)"><div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><div class="label">Demanda</div>${!modo ? '<button class="btn sm ghost" data-do="modo" data-m="mover">Mover</button>' : ''}</div><button class="linkbtn" data-dem-go="${esc(d ? d.id : '')}" style="margin-top:4px">${esc(d ? d.titulo : a.demanda)}</button><div class="small muted">${esc(d ? d.tipo : '')}${fr ? ` · frente ${esc(fr.nome)}` : ''}</div></div>
       ${acompHtml('acao', a, modo)}
       ${hist ? `<div><div class="label" style="margin-bottom:6px">Histórico de prazo</div><div class="hist">${hist}</div></div>` : ''}
       ${a.motivoCancel ? `<div class="note">Cancelada: ${esc(a.motivoCancel)}</div>` : ''}
@@ -1304,7 +1368,7 @@ function editDemModalHtml() {
     <p class="small muted" style="margin:0">${tipoLivre ? 'O código não muda ao trocar o tipo. ' : 'Entregas de frente, deliberações e desvios mantêm o tipo. '}Responsável muda em Trocar responsável; o status vem das ações.</p>
   </div>`;
 }
-const cabModal = t => `<div style="display:flex;justify-content:space-between;align-items:center;gap:10px"><h2 id="mT" tabindex="-1">${t}</h2><button class="btn sm ghost xbtn" data-do="fechar" aria-label="Fechar">✕</button></div>`;
+const cabModal = t => `<div style="display:flex;justify-content:space-between;align-items:center;gap:10px"><h2 id="mT" tabindex="-1">${t}</h2><button class="btn sm" data-do="fechar">Fechar</button></div>`;
 function frenteModalHtml() {
   const cli = S.modal.cli || S.cli;
   return `<div class="modal" role="dialog" aria-modal="true" aria-labelledby="mT">
@@ -1398,7 +1462,7 @@ function modalHtml() {
   const areaPre = pre && st.demanda(pre) ? st.demanda(pre).area : '';
   const pf = S.modal.pre || {};
   return `<div class="modal" role="dialog" aria-modal="true" aria-labelledby="mT">
-    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px"><h2 id="mT" tabindex="-1">${S.modal.comp ? 'Virar pendência' : 'Nova ação'}</h2><button class="btn sm ghost xbtn" data-do="fechar" aria-label="Fechar">✕</button></div>
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px"><h2 id="mT" tabindex="-1">${S.modal.comp ? 'Virar pendência' : 'Nova ação'}</h2><button class="btn sm" data-do="fechar">Fechar</button></div>
     <form id="fNova" class="form">
       <div class="field full"><label for="mCli">Cliente</label><select id="mCli">${clientesOrd().map(c => `<option value="${esc(c.id)}"${c.id === cli ? ' selected' : ''}>${esc(c.nome)}</option>`).join('')}</select></div>
       <div class="field full"><label for="mAcao">O quê (ação)</label><input id="mAcao" required maxlength="255" value="${esc(pf.acao || '')}" placeholder="Verbo no infinitivo + objeto. Ex.: Enviar a posição do estoque de outubro"></div>
@@ -1420,8 +1484,24 @@ function abrirAcao(id) { S.drawer = { id, modo: null }; S.modal = null; renderLa
 function sujo() {
   return [...document.querySelectorAll('#layer form input:not([type=checkbox]):not([type=hidden]), #layer form textarea')].some(i => i.value.trim() && i.value !== i.defaultValue);
 }
+// Confirmação no tema do app, no lugar do confirm() do navegador. Esc ou "Voltar" desistem.
+function confirmar(msg, { sim = 'Confirmar', nao = 'Voltar', perigo = false } = {}) {
+  const d = $('#confirma'), bs = $('#confirmaSim'), bn = $('#confirmaNao');
+  return new Promise(res => {
+    $('#confirmaMsg').textContent = msg;
+    bs.textContent = sim; bn.textContent = nao; bs.classList.toggle('perigo', perigo);
+    const volta = document.activeElement;
+    const fim = ok => { bs.onclick = bn.onclick = d.oncancel = null; d.close(); if (volta && volta.isConnected) volta.focus(); res(ok); };
+    bs.onclick = () => fim(true); bn.onclick = () => fim(false);
+    d.oncancel = e => { e.preventDefault(); fim(false); };
+    d.showModal(); bn.focus();
+  });
+}
 function fechar(forcar) {
-  if (!forcar && sujo() && !confirm('Descartar o que foi digitado?')) return;
+  if (!forcar && sujo()) {
+    confirmar('Descartar o que foi digitado?', { sim: 'Descartar', nao: 'Continuar editando', perigo: true }).then(ok => { if (ok) fechar(true); });
+    return;
+  }
   S.drawer = null; S.modal = null; renderLayer();
 }
 
@@ -1461,11 +1541,12 @@ async function recarregar(silencioso) {
   if (S.reloading) return;
   S.reloading = true; document.body.classList.add('busy');
   const b = $('#btnSync'); if (b) { b.disabled = true; b.textContent = 'Atualizando…'; }
+  if (!silencioso) carregando('Lendo as listas do SharePoint…');
   try { await st.load(); if (!silencioso) toast('Dados atualizados do SharePoint'); }
   catch (e) { console.error(e); toast('Não consegui ler as listas: ' + (e.message || e), true); }
   finally {
     S.reloading = false; document.body.classList.remove('busy');
-    if (b) { b.disabled = false; b.textContent = 'Atualizar'; }
+    if ($('#toast').classList.contains('carregando')) fecharToast();
     render();
   }
 }
@@ -1489,12 +1570,13 @@ const atualizarEstadoAta = () => { const el = $('#ataEstado'); if (el) el.innerH
 
 /* ---------- eventos ---------- */
 function onClick(e) {
-  const acct = $('#acct'); if (acct && acct.open && !e.target.closest('#acct')) acct.open = false;
+  if (!e.target.closest('#mais')) abrirMais(false);
   if (e.target.closest('.c-sel')) return;   // caixa de marcar: só o change trata
   const t = e.target.closest('button, a, tr[data-acao], tr[data-comp], tr[data-cli-go], [data-do]');
   if (!t) return;
   const ds = t.dataset;
-  if (ds.tema) { aplicarTema(ds.tema); render(); const b = document.querySelector(`#${t.closest('.tema').id} [data-tema="${ds.tema}"]`); if (b) b.focus(); return; }
+  if (t.id === 'maisBtn') { abrirMais($('#maisMenu').hidden); if (!$('#maisMenu').hidden) $('#maisMenu a').focus(); return; }
+  if (ds.do === 'tema') { alternarTema(); render(); $('#btnTema').focus(); return; }
   if (ds.fcli) { e.stopPropagation(); filtrarPelaTag(ds.fcli); return; }
   if (ds.semp) { S.pessoaSemana = ds.semp; render(); window.scrollTo(0, 0); const f = $('#selP'); if (f) f.focus(); return; }
   if (ds.cliSet) { S.cli = ds.cliSet; S.todos = false; }
@@ -1536,9 +1618,11 @@ function onClick(e) {
       S.drawer = null; fecharComp(c, ds.do === 'compFeito' ? 'Feito' : 'Não ocorreu', res); break;
     }
     case 'compCancelar': {
-      const c = st.compromisso(S.drawer.comp);
-      if (!confirm(c.rec === 'Única' ? `Cancelar “${c.oque}”?` : `Cancelar esta vez e encerrar a repetição de “${c.oque}”? Nenhuma nova ocorrência será criada.`)) break;
-      S.drawer = null; fecharComp(c, 'Cancelado', $('#cRes') ? $('#cRes').value.trim() : undefined); break;
+      const c = st.compromisso(S.drawer.comp), res = $('#cRes') ? $('#cRes').value.trim() : undefined;
+      confirmar(c.rec === 'Única' ? `Cancelar “${c.oque}”?` : `Cancelar esta vez e encerrar a repetição de “${c.oque}”? Nenhuma nova ocorrência será criada.`,
+        { sim: c.rec === 'Única' ? 'Cancelar compromisso' : 'Cancelar e encerrar', perigo: true })
+        .then(ok => { if (ok) { S.drawer = null; fecharComp(c, 'Cancelado', res); } });
+      break;
     }
     case 'virarPend': {
       const c = st.compromisso(S.drawer.comp);
@@ -1575,8 +1659,10 @@ function onClick(e) {
     case 'copiarAta': copiar($('#ataTxt').value, $('#ataTxt')); break;
     case 'gerarAta': {
       const fo = st.forum(S.fo.id); if (!fo) break;
-      if (S.ataDirty && !confirm('Gerar a ata de novo apaga as edições que você fez no texto. Continuar?')) break;
-      S.ataRascunho = null; S.ataDirty = false; esquecerAta(); $('#ataTxt').value = st.ataDoForum(fo); atualizarEstadoAta(); break;
+      const gerar = () => { S.ataRascunho = null; S.ataDirty = false; esquecerAta(); const el = $('#ataTxt'); if (el) el.value = st.ataDoForum(fo); atualizarEstadoAta(); };
+      if (!S.ataDirty) { gerar(); break; }
+      confirmar('Gerar a ata de novo apaga as edições que você fez no texto. Continuar?', { sim: 'Gerar de novo', perigo: true }).then(ok => { if (ok) gerar(); });
+      break;
     }
     case 'salvarAta': {
       const fo = st.forum(S.fo.id); if (!fo) break;
@@ -1592,8 +1678,8 @@ function onClick(e) {
     case 'foEditar': { const fo = st.forum(S.fo.id); if (!fo) break; S.conv = novoRascunho(fo); S.fo = { id: fo.id, editar: true }; go('forum'); window.scrollTo({ top: 0 }); break; }
     case 'foCancelar': {
       const fo = st.forum(S.fo.id); if (!fo) break;
-      if (!confirm(`Cancelar o fórum de ${fmtF(fo.data)}${fo.hora ? ' às ' + fo.hora : ''}? A pauta fica registrada, mas o fórum não acontece.`)) break;
-      grava(() => st.cancelarForum(fo), 'Fórum cancelado', () => grava(() => st.reagendarForum(fo), 'Fórum agendado de novo'));
+      confirmar(`Cancelar o fórum de ${fmtF(fo.data)}${fo.hora ? ' às ' + fo.hora : ''}? A pauta fica registrada, mas o fórum não acontece.`, { sim: 'Cancelar fórum', perigo: true })
+        .then(ok => { if (ok) grava(() => st.cancelarForum(fo), 'Fórum cancelado', () => grava(() => st.reagendarForum(fo), 'Fórum agendado de novo')); });
       break;
     }
     case 'foExcluir': {
@@ -1602,12 +1688,14 @@ function onClick(e) {
       const ligados = [np ? `${np} ${plural(np, 'item da pauta', 'itens da pauta')}` : '', nd ? `${nd} ${plural(nd, 'deliberação', 'deliberações')}` : '', fo.ata ? 'a ata' : ''].filter(Boolean);
       const msg = `Excluir o fórum de ${fmtF(fo.data)}${fo.hora ? ' às ' + fo.hora : ''}?\n\nVão para a lixeira do SharePoint: o fórum${ligados.length ? ', ' + ligados.join(', ') : ''}. ` +
         `As ações criadas nele continuam no plano.${fo.situacao === 'Em andamento' ? ' O fórum está em andamento.' : ''}\n\nDá para restaurar pela lixeira do site em até 93 dias.`;
-      if (!confirm(msg)) break;
-      grava(async () => {
-        const r = await st.excluirForum(fo);
-        if (S.ataRascunho && S.ataRascunho.fo === fo.id) { S.ataRascunho = null; S.ataDirty = false; esquecerAta(); }
-        S.fo = {}; syncHash(); return r;
-      }, `Fórum de ${fmtF(fo.data)} excluído`);
+      confirmar(msg, { sim: 'Excluir fórum', perigo: true }).then(ok => {
+        if (!ok) return;
+        grava(async () => {
+          const r = await st.excluirForum(fo);
+          if (S.ataRascunho && S.ataRascunho.fo === fo.id) { S.ataRascunho = null; S.ataDirty = false; esquecerAta(); }
+          S.fo = {}; syncHash(); return r;
+        }, `Fórum de ${fmtF(fo.data)} excluído`);
+      });
       break;
     }
     case 'foIniciar': S.drawer = null; S.modal = { kind: 'presenca', fo: S.fo.id, iniciar: true }; renderLayer(); break;
@@ -1617,13 +1705,18 @@ function onClick(e) {
     case 'foEncerrar': {
       const fo = st.forum(S.fo.id); if (!fo) break;
       const sem = st.pautaDe(fo.id).filter(p => !p.trat).length;
-      if (!confirm(sem ? `${sem} ${plural(sem, 'item está', 'itens estão')} sem tratamento e ${plural(sem, 'vai', 'vão')} como “Não tratado” para a pauta do próximo fórum. Encerrar o fórum?` : 'Encerrar o fórum? Depois de encerrado, a pauta não muda mais e a ata fica pronta para revisar.')) break;
-      grava(() => st.encerrarForum(fo), 'Fórum encerrado. Revise a ata e salve no SharePoint.');
+      confirmar(sem ? `${sem} ${plural(sem, 'item está', 'itens estão')} sem tratamento e ${plural(sem, 'vai', 'vão')} como “Não tratado” para a pauta do próximo fórum. Encerrar o fórum?` : 'Encerrar o fórum? Depois de encerrado, a pauta não muda mais e a ata fica pronta para revisar.', { sim: 'Encerrar fórum' })
+        .then(ok => { if (ok) grava(() => st.encerrarForum(fo), 'Fórum encerrado. Revise a ata e salve no SharePoint.'); });
       break;
     }
     case 'copiarCob': copiar($('#cobTxt').value, $('#cobTxt')); break;
     case 'recarregar': recarregar(); break;
-    case 'sair': if (S.ataDirty && !confirm('A ata editada ainda não foi salva no SharePoint. Sair mesmo assim?')) break; esquecerAta(); if (ctx.logout) ctx.logout(); break;
+    case 'sair': {
+      const sair = () => { esquecerAta(); if (ctx.logout) ctx.logout(); };
+      if (!S.ataDirty) { sair(); break; }
+      confirmar('A ata editada ainda não foi salva no SharePoint. Sair mesmo assim?', { sim: 'Sair sem salvar', perigo: true }).then(ok => { if (ok) sair(); });
+      break;
+    }
     default: break;
   }
 }
@@ -1750,12 +1843,14 @@ function onSubmit(e) {
     if (inicio && inicio > fim) { $('#nfErr').textContent = 'O início não pode ser depois do fim previsto.'; return; }
     if (!st.nominal(dono)) { $('#nfErr').textContent = 'Escolha uma pessoa como dono, não uma empresa ou setor.'; return; }
     const nomeDup = st.frentes.find(x => x.cli === cli && !x.encerrada && x.nome.trim().toLowerCase() === nome.toLowerCase());
-    if (nomeDup && !confirm(`Já existe a frente aberta “${nomeDup.nome}” (${nomeDup.id}). Criar outra com o mesmo nome?`)) return;
-    grava(async () => {
-      const r = await st.novaFrente({ cli, nome, area, dono, apoio: $('#nfApoio').value.trim(), inicio, fim, entrega: $('#nfEnt').value.trim() });
+    const apoio = $('#nfApoio').value.trim(), entrega = $('#nfEnt').value.trim();
+    const criar = () => grava(async () => {
+      const r = await st.novaFrente({ cli, nome, area, dono, apoio, inicio, fim, entrega });
       S.cli = cli; S.modal = { dem: r.entrega.id, cli };
       return r;
     }, r => `Frente ${r.frente.id} criada. Agora registre a primeira ação.`);
+    if (nomeDup) confirmar(`Já existe a frente aberta “${nomeDup.nome}” (${nomeDup.id}). Criar outra com o mesmo nome?`, { sim: 'Criar outra' }).then(ok => { if (ok) criar(); });
+    else criar();
   }
   if (f.id === 'fEntrega') {
     const fr = st.frente(S.modal.fr), titulo = $('#neTit').value.trim(), resp = $('#neResp').value, area = $('#neArea').value, prazo = $('#nePrazo').value;
@@ -1859,9 +1954,12 @@ function cliqueConvocacao(ds) {
       const alvo = ds.cv === 'rm' ? `[data-cv="rm"][data-i="${Math.min(i, l.length - 1)}"]` : `[data-cv="${ds.cv}"][data-i="${ds.cv === 'up' ? i - 1 : i + 1}"]`;
       focoPor(alvo); return;
     }
-    case 'voltar':
-      if (S.conv && S.conv.dirty && !confirm('Sair sem salvar a convocação? O que você preencheu fica guardado até você convocar outro fórum.')) return;
-      S.fo = S.fo.editar ? { id: S.fo.id } : {}; if (S.conv && S.conv.editId) S.conv = null; go('forum'); return;
+    case 'voltar': {
+      const sair = () => { S.fo = S.fo.editar ? { id: S.fo.id } : {}; if (S.conv && S.conv.editId) S.conv = null; go('forum'); };
+      if (S.conv && S.conv.dirty) confirmar('Sair sem salvar a convocação? O que você preencheu fica guardado até você convocar outro fórum.', { sim: 'Sair sem salvar' }).then(ok => { if (ok) sair(); });
+      else sair();
+      return;
+    }
     case 'salvar': {
       const c = S.conv;
       c.data = $('#cvData').value; c.hora = $('#cvHora').value; c.local = $('#cvLocal').value.trim();
@@ -1975,9 +2073,10 @@ export function startApp(theStore, context) {
   document.addEventListener('input', onInput);
   document.addEventListener('change', onChange);
   document.addEventListener('keydown', e => {
+    if ($('#confirma').open) return;   // a confirmação cuida do próprio Esc e do foco
     if (e.key === 'Escape') {
       if (S.drawer || S.modal) { e.preventDefault(); fechar(); return; }
-      const acct = $('#acct'); if (acct && acct.open) { acct.open = false; acct.querySelector('summary').focus(); }
+      if (!$('#maisMenu').hidden) { abrirMais(false); $('#maisBtn').focus(); }
     }
     if (e.key === 'Tab' && (S.drawer || S.modal)) prenderFoco(e);
     // Andamento: Enter grava, Shift+Enter quebra a linha.

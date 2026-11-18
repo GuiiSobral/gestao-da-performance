@@ -2,8 +2,15 @@
 // montarRelatorio() só lê o store e devolve dados prontos (testável no Node);
 // baixarPdf() e baixarExcel() carregam as bibliotecas só quando alguém exporta.
 
-const ACENTO = '#0E5D57', ACENTO_SUAVE = '#DAEDE9', TINTA = '#17201D', CINZA = '#56635E', LINHA = '#D6DEDA';
-const COR_SIT = { bad: '#B42318', warn: '#B54708', good: '#0E5D57', ok: '#56635E', off: '#56635E' };
+// Cores do guia Solve (seção 9.4: ferramentas sem CSS): faixa azul-noite com detalhe pêssego, cabeçalho azul Solve, destaque suave.
+const FAIXA = '#0C1037', PESSEGO = '#F7AC70', ACENTO = '#2D368C', ACENTO_SUAVE = '#E5EBFD', TINTA = '#0D182D', CINZA = '#5A6475', LINHA = '#E2E6EE', FAIXA_TXT = '#BBC3DF';
+const COR_SIT = { bad: '#A24E10', warn: '#5E2F11', good: '#2D368C', ok: '#5A6475', off: '#5A6475' };
+// Filete pêssego inclinado da assinatura Solve, desenhado no PDF.
+function filete(doc, x, y, h) {
+  const w = h * 0.45, k = h * 0.25;
+  doc.setFillColor(PESSEGO);
+  doc.lines([[w, 0], [k, -h], [-w, 0]], x, y, [1, 1], 'F', true);
+}
 
 const dataBR = i => (i ? `${i.slice(8, 10)}/${i.slice(5, 7)}/${i.slice(0, 4)}` : '');
 const dt = i => new Date(i + 'T12:00:00');
@@ -98,13 +105,16 @@ export async function gerarPdf(rel) {
   const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
   const W = doc.internal.pageSize.getWidth(), H = doc.internal.pageSize.getHeight(), M = 12;
 
-  // Cabeçalho da primeira página
-  doc.setFillColor(ACENTO); doc.rect(0, 0, W, 2.2, 'F');
-  doc.setFont('helvetica', 'bold'); doc.setFontSize(8); doc.setTextColor(ACENTO);
-  doc.text('SOLVE GROUP  ·  GESTÃO DA PERFORMANCE', M, 10);
-  doc.setFontSize(17); doc.setTextColor(TINTA);
-  doc.text(rel.titulo, M, 18);
-  let y = 25;
+  // Cabeçalho da primeira página: faixa azul-noite com a assinatura Solve
+  doc.setFillColor(FAIXA); doc.rect(0, 0, W, 14, 'F');
+  filete(doc, M, 10, 5);
+  doc.setFont('helvetica', 'bold'); doc.setFontSize(12); doc.setTextColor('#FFFFFF');
+  doc.text('Solve', M + 5, 9.6);
+  doc.setFont('helvetica', 'normal'); doc.setFontSize(9); doc.setTextColor(FAIXA_TXT);
+  doc.text('Gestão da Performance', M + 18, 9.6);
+  doc.setFont('helvetica', 'bold'); doc.setFontSize(17); doc.setTextColor(TINTA);
+  doc.text(rel.titulo, M, 24);
+  let y = 31;
   const colW = (W - 2 * M) / 4;
   rel.cab.forEach(([k, v], i) => {
     const x = M + i * colW;
@@ -166,7 +176,7 @@ export async function gerarPdf(rel) {
     margin: { left: M, right: M, top: 16, bottom: 14 },
     theme: 'plain',
     styles: { font: 'helvetica', fontSize: 8.5, textColor: TINTA, cellPadding: { top: 2, right: 2.2, bottom: 2, left: 2.2 }, valign: 'top', overflow: 'linebreak', lineColor: LINHA },
-    headStyles: { fontStyle: 'bold', fontSize: 7.5, textColor: CINZA, fillColor: '#E9EEEB', lineWidth: { bottom: 0.3 } },
+    headStyles: { fontStyle: 'bold', fontSize: 7.5, textColor: '#FFFFFF', fillColor: ACENTO },
     bodyStyles: { lineWidth: { bottom: 0.2 } },
     showHead: 'everyPage', rowPageBreak: 'avoid',
     didParseCell: h => {
@@ -176,9 +186,10 @@ export async function gerarPdf(rel) {
     didDrawPage: () => {
       const pg = doc.internal.getCurrentPageInfo().pageNumber;
       if (pg > 1) {
-        doc.setFillColor(ACENTO); doc.rect(0, 0, W, 2.2, 'F');
-        doc.setFont('helvetica', 'bold'); doc.setFontSize(8); doc.setTextColor(CINZA);
-        doc.text(`${rel.titulo}  ·  ${rel.cab[0][1]}`, M, 10);
+        doc.setFillColor(FAIXA); doc.rect(0, 0, W, 9, 'F');
+        filete(doc, M, 6.6, 3.6);
+        doc.setFont('helvetica', 'bold'); doc.setFontSize(8); doc.setTextColor('#FFFFFF');
+        doc.text(`${rel.titulo}  ·  ${rel.cab[0][1]}`, M + 5, 6.2);
       }
       doc.setFont('helvetica', 'normal'); doc.setFontSize(7.5); doc.setTextColor(CINZA);
       doc.text(`Gestão da Performance · Solve Group · emitido em ${rel.cab[2][1]} por ${rel.cab[3][1]}`, M, H - 7);
@@ -217,7 +228,8 @@ export function planilha(rel) {
   const N = cols.length;
   const linhaCab = (k, v) => [{ value: k, fontWeight: 'bold', textColor: CINZA }, { value: v, columnSpan: 4 }, null, null, null];
   const rows = [
-    [{ value: 'SOLVE GROUP · GESTÃO DA PERFORMANCE', fontWeight: 'bold', textColor: ACENTO, fontSize: 9, columnSpan: 5 }, null, null, null, null],
+    [{ value: 'SOLVE  ·  GESTÃO DA PERFORMANCE', fontWeight: 'bold', textColor: '#FFFFFF', backgroundColor: FAIXA, fontSize: 10, height: 22, alignVertical: 'center', columnSpan: N },
+      ...Array(N - 1).fill(null)],
     [{ value: rel.titulo, fontWeight: 'bold', fontSize: 15, height: 22, columnSpan: 5 }, null, null, null, null],
     ...rel.cab.map(([k, v]) => linhaCab(k, v)),
     linhaCab('Resumo', rel.resumo),
@@ -252,9 +264,9 @@ export async function gerarExcel(rel) {
   const opts = { sheet: 'Ações', columns: p.columns, stickyRowsCount: p.linhaTitulos + 1, orientation: 'landscape' };
   let blob;
   try {
-    blob = await writeExcelFile(p.rows, opts, { fontFamily: 'Calibri', fontSize: 10, features: [filtroAuto(ref)] }).toBlob();
+    blob = await writeExcelFile(p.rows, opts, { fontFamily: 'Segoe UI', fontSize: 10, features: [filtroAuto(ref)] }).toBlob();
   } catch (e) {
-    blob = await writeExcelFile(p.rows, opts, { fontFamily: 'Calibri', fontSize: 10 }).toBlob();
+    blob = await writeExcelFile(p.rows, opts, { fontFamily: 'Segoe UI', fontSize: 10 }).toBlob();
   }
   return blob;
 }

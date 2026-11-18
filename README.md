@@ -82,7 +82,13 @@ Lugar para registrar o que acontece durante a execução de uma ação ou de um 
 
 ## Interface
 
-- Tema claro, escuro ou automático (segue o sistema), escolhido no rodapé do menu ou em **Conta** no celular; fica salvo no navegador.
+- Visual pelo guia **Identidade visual e UX da Solve** (v1.0, 18/11/2026): faixa de marca azul-noite com a assinatura Solve e as abas (aba ativa com sublinhado pêssego), uma cor de destaque (azul Solve `#2D368C`), tons do mesmo azul nos gráficos, pêssego só como sinal de atenção, sem sombras e fonte Inter. Os tokens estão no início de `src/styles.css`.
+- Farol e situações sem vermelho, amarelo e verde: crítico/vencido em `--warn` (preenchido), atenção em pêssego claro, em dia/OK em azul. A forma do sinal (círculo, triângulo, círculo com ✓) e o texto continuam dizendo o estado.
+- Tema claro ou escuro pelo botão de lua/sol na faixa; a escolha fica salva no navegador e, na primeira visita, segue o sistema.
+- Linha **Dados do SharePoint lidos hoje às HH:MM** com **Atualizar** abaixo do título de cada tela.
+- No celular (até 760 px), as abas viram navegação inferior: Visão, Ações, Fórum, Semana e **Mais** (Carteira, Demandas, Compromissos). Detalhes e formulários abrem em tela cheia.
+- Confirmações (descartar o que foi digitado, cancelar compromisso, cancelar, excluir ou encerrar fórum, sair com ata não salva) aparecem num diálogo do próprio app, nunca no `confirm()` do navegador.
+- PDF e Excel exportados com a faixa azul-noite, cabeçalho da tabela em azul Solve e as cores de situação do guia.
 - Filtros e telas ficam no endereço (ex.: `#acoes?cli=MOE&sit=vencidas`): o Voltar funciona e o link pode ser enviado.
 - Ações e Demandas têm o filtro de cliente na barra de filtros, com **Todos os clientes** (`#acoes?cli=todos`): junta os clientes da carteira, fora o interno e os encerrados. Minha semana e Compromissos também filtram por cliente. Minha semana tem **Todos os responsáveis** (`#semana?p=todos`): as ações e os compromissos abertos de todos, com o quadro Por responsável (vencidas, vencem em 7 dias, sem prazo e total); clicar no nome abre a semana da pessoa e a mensagem de cobrança dela. Nas listas que misturam clientes, clicar no código do cliente (ex.: MOE) filtra a tela por ele.
 - Concluir uma ação ou encerrar uma demanda mostra **Desfazer** por 6 segundos.

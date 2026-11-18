@@ -3,28 +3,29 @@ import { initAuth, login, logout, getToken, authErrorMessage } from './auth.js';
 import { GraphBackend, MemoryBackend } from './graph.js';
 import { Store } from './store.js';
 import { startApp } from './app.js';
-import { aplicarTema, temaAtual } from './theme.js';
+import { aplicarTema, temaAtual, temaSalvo } from './theme.js';
 
 aplicarTema(temaAtual());
-if (window.matchMedia) matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', () => aplicarTema(temaAtual()));
+// Sem escolha salva, o tema acompanha o sistema.
+if (window.matchMedia) matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', () => { if (!temaSalvo()) aplicarTema(temaAtual()); });
 
 const root = document.getElementById('root');
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
 function tela(conteudo) {
   root.innerHTML = `<div class="gate"><div class="gate-card">
-    <div class="brand"><b>Gestão da Performance</b><span>Solve Group</span></div>
+    <div class="marca"><b>Solve</b><span>Gestão da Performance</span></div>
     ${conteudo}
   </div></div>`;
 }
 function telaLogin(erro) {
   tela(`<p>Demandas, ações e fóruns de todos os clientes da Solve, gravados direto nas listas do SharePoint.</p>
-    <button class="btn primary" id="btnLogin">Entrar com a conta da Solve</button>
+    <button class="btn primary grande" id="btnLogin">Entrar com a conta da Solve</button>
     ${erro ? `<p class="err-text" role="alert">${esc(erro)}</p>` : '<p class="small muted">Use a sua conta @solvegroup.com.br. No primeiro acesso a Microsoft pede para você aprovar a permissão do app.</p>'}`);
   document.getElementById('btnLogin').addEventListener('click', () => login());
 }
 function telaCarregando(msg) {
-  tela(`<p class="loading">${esc(msg)}</p>`);
+  tela(`<p class="loading" role="status"><span class="girador" aria-hidden="true"></span>${esc(msg)}</p>`);
 }
 function telaErro(msg, detalhe) {
   tela(`<p class="err-text" role="alert">${esc(msg)}</p>${detalhe ? `<p class="small muted mono">${esc(detalhe)}</p>` : ''}
