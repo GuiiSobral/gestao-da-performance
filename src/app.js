@@ -2,6 +2,7 @@
 import { AREAS, hojeISO, lerLinha, TIPOS_COMP, TIPOS_DEM, REPETICOES, TOPICO, normTxt, MAX_ACOMP } from './store.js';
 import { alternarTema, botaoTema } from './theme.js';
 import { montarRelatorio, baixarPdf, baixarExcel } from './exportar.js';
+import { baixarAtaPdf, baixarAtaDocx, nomeArquivoAta } from './ata.js';
 
 let st = null;          // Store
 let ctx = {};           // { logout, listUrl }
@@ -697,6 +698,25 @@ async function exportar(formato) {
   } finally { document.body.classList.remove('busy'); }
 }
 
+/* ---------- Ata do fórum em PDF e Word ---------- */
+async function baixarAta(formato) {
+  const fo = st.forum(S.fo.id), el = $('#ataTxt');
+  if (!fo || !el) return;
+  const texto = el.value.trim();
+  if (!texto) { toast('A ata está vazia.', true); return; }
+  const agora = new Date();
+  const meta = { codigo: fo.id, emitido: `${agora.toLocaleDateString('pt-BR')}, ${agora.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}` };
+  const nome = nomeArquivoAta(fo, cliNome(fo.cli));
+  document.body.classList.add('busy');
+  try {
+    if (formato === 'pdf') await baixarAtaPdf(texto, meta, nome); else await baixarAtaDocx(texto, meta, nome);
+    toast(`${nome}.${formato} baixado`);
+  } catch (e) {
+    console.error(e);
+    toast('Não foi possível gerar o arquivo. Tente de novo; se persistir, me avise.', true);
+  } finally { document.body.classList.remove('busy'); }
+}
+
 /* ---------- Fórum ---------- */
 // O fórum nasce de uma convocação (data, horário, local, convocados e pauta escolhida à mão) e passa por
 // Agendado → Em andamento → Realizado, ou Cancelado. A ata sai do que foi feito em cada item da pauta.
@@ -915,13 +935,14 @@ function renderForumDetalhe(fo) {
   if (fo.situacao === 'Realizado' && fo.antigo) {
     const dl = st.delib.filter(x => x.forum === fo.id);
     return `${head}<div class="note">Fórum registrado antes da convocação com pauta: não tem pauta nem desdobramentos.</div>
-      ${fo.ata ? `<section class="panel"><header><h2>Ata</h2><span class="row-actions"><button class="btn sm" data-do="copiarAta">Copiar texto</button></span></header><textarea class="out" id="ataTxt" aria-label="Ata">${esc(S.ataRascunho && S.ataRascunho.fo === fo.id ? S.ataRascunho.texto : fo.ata)}</textarea>
+      ${fo.ata ? `<section class="panel"><header><h2>Ata</h2><span class="row-actions"><button class="btn sm" data-do="copiarAta">Copiar texto</button><button class="btn sm" data-do="ataPdf">Baixar PDF</button><button class="btn sm" data-do="ataDocx">Baixar Word</button></span></header><textarea class="out" id="ataTxt" aria-label="Ata">${esc(S.ataRascunho && S.ataRascunho.fo === fo.id ? S.ataRascunho.texto : fo.ata)}</textarea>
         <div class="row-actions" style="margin-top:10px;align-items:center"><button class="btn primary" data-do="salvarAta">Salvar ata no SharePoint</button><span class="small" id="ataEstado">${ataEstado(fo)}</span></div></section>` : ''}
       <section class="panel"><header><h2>Deliberações</h2><span class="small muted">${dl.length}</span></header>${dl.length ? `<div class="list">${dl.map(x => `<div class="li"><span class="tag">${esc(x.tipo)}</span><div class="body">${esc(x.texto)}<div class="meta"><span>${esc(x.resp ? st.nome(x.resp) : '—')}</span>${x.demanda && st.demanda(x.demanda) ? `<span>${esc(st.demanda(x.demanda).titulo)}</span>` : ''}${x.acaoId ? `<button class="linkbtn" data-acao="${esc(x.acaoId)}">${esc(x.acaoId)}</button>` : ''}</div></div></div>`).join('')}</div>` : '<div class="empty small">Nenhuma deliberação registrada.</div>'}</section>`;
   }
   if (fo.situacao === 'Realizado') {
     const texto = S.ataRascunho && S.ataRascunho.fo === fo.id ? S.ataRascunho.texto : fo.ata || st.ataDoForum(fo);
-    return `${head}<section class="panel"><header><h2>Ata para o grupo do WhatsApp</h2><span class="row-actions">${fo.antigo ? '' : '<button class="btn sm" data-do="gerarAta">Gerar de novo</button>'}<button class="btn sm" data-do="copiarAta">Copiar texto</button></span></header>
+    return `${head}<section class="panel"><header><h2>Ata do fórum</h2><span class="row-actions">${fo.antigo ? '' : '<button class="btn sm ghost" data-do="gerarAta">Gerar de novo</button>'}<button class="btn sm" data-do="copiarAta">Copiar texto</button><button class="btn sm" data-do="ataPdf">Baixar PDF</button><button class="btn sm" data-do="ataDocx">Baixar Word</button></span></header>
+      <p class="small muted" style="margin:0 0 8px">Revise e ajuste o texto se precisar. Copiar, PDF e Word saem do texto como está na tela, com as suas edições. *Asteriscos* marcam negrito no WhatsApp e títulos no PDF e no Word.</p>
       <textarea class="out" id="ataTxt" aria-label="Ata">${esc(texto)}</textarea>
       <div class="row-actions" style="margin-top:10px;align-items:center"><button class="btn primary" data-do="salvarAta">Salvar ata no SharePoint</button><span class="small" id="ataEstado">${ataEstado(fo)}</span></div></section>
       ${itens.length ? pautaLeitura(itens, true) : ''}`;
@@ -1657,6 +1678,7 @@ function onClick(e) {
     case 'novaFrente': S.drawer = null; S.modal = { kind: 'frente', cli: S.cli }; renderLayer(); { const i = $('#nfNome'); if (i) i.focus(); } break;
     case 'novaEntrega': S.drawer = null; S.modal = { kind: 'entrega', fr: ds.fr }; renderLayer(); { const i = $('#neTit'); if (i) i.focus(); } break;
     case 'copiarAta': copiar($('#ataTxt').value, $('#ataTxt')); break;
+    case 'ataPdf': case 'ataDocx': baixarAta(ds.do === 'ataPdf' ? 'pdf' : 'docx'); break;
     case 'gerarAta': {
       const fo = st.forum(S.fo.id); if (!fo) break;
       const gerar = () => { S.ataRascunho = null; S.ataDirty = false; esquecerAta(); const el = $('#ataTxt'); if (el) el.value = st.ataDoForum(fo); atualizarEstadoAta(); };

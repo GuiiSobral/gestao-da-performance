@@ -222,22 +222,31 @@ test('encerrar marca o que ficou sem tratamento e leva para o próximo fórum', 
   assert.equal(s.naoTratados('MOE').length, 1);
 });
 
-test('ata sai dos desdobramentos da pauta', async () => {
+test('ata sai dos desdobramentos da pauta, organizada por seções', async () => {
   const { s, fo } = await emAndamento([{ tipo: 'Demanda', reg: 'MOE-QC-01' }, { tipo: 'Tópico livre', assunto: 'Informes' }]);
   await s.concluir(s.acao('MOE-A001'));
   await s.reprogramar(s.acao('MOE-A002'), '2026-12-15', 'aguardando o banco');
   await s.encerrarForum(fo);
   const t = s.ataDoForum(fo);
-  assert.match(t, /^\*Fórum de Gestão \| Moendo \| 05\/11\/2026 às 09:30\*/);
-  assert.match(t, /Local: Sede da Moendo/);
-  assert.match(t, /Presentes: Guilherme/);
-  assert.match(t, /Ausentes: Ana/);
-  assert.match(t, /1\. Fluxo de caixa diário \| Tratado/);
-  assert.match(t, /Concluída: Ação MOE-A001 \(Ana\)/);
-  assert.match(t, /Novo prazo 15\/12 \(era 30\/11\): Ação MOE-A002 \(Ana\)\. Motivo: aguardando o banco/);
-  assert.match(t, /2\. Informes \| Não tratado, volta na próxima pauta/);
-  assert.match(t, /\*Próximos passos\*\n• Ação MOE-A002 \| \*Ana\* \| até 15\/12/);
-  assert.doesNotMatch(t, /Contexto|Riscos/);
+  assert.match(t, /^\*ATA DO FÓRUM DE GESTÃO\*\n\*Moendo\*\n\n\*Data:\* quinta-feira, 05\/11\/2026, às 09:30\n\*Local:\* Sede da Moendo/);
+  assert.match(t, /\*Presentes:\* Guilherme \(Solve\)/);
+  assert.match(t, /\*Ausentes:\* Ana/);
+  assert.match(t, /\*RESUMO\*\nForam 2 assuntos em pauta: 1 tratado e 1 adiado para o próximo fórum\. Resultado: 1 ação concluída e 1 prazo repactuado\./);
+  assert.match(t, /\*ASSUNTOS TRATADOS\*\n\n\*1\. Fluxo de caixa diário\*\nQuestão crítica MOE-QC-01\n/);
+  assert.match(t, /• Ação concluída: Ação MOE-A001 \(Ana\)\./);
+  assert.match(t, /• Prazo repactuado de 30\/11\/2026 para 15\/12\/2026: Ação MOE-A002 \(Ana\)\. Motivo: aguardando o banco\./);
+  assert.match(t, /\*NÃO TRATADOS \(VOLTAM NA PRÓXIMA PAUTA\)\*\n• Informes/);
+  assert.match(t, /\*ENCAMINHAMENTOS\*\n\n\*Ana\*\n• Ação MOE-A002, até 15\/12\/2026/);
+  assert.doesNotMatch(t, /\|/);
+});
+
+test('na ata, item que é a própria ação não repete o texto dela', async () => {
+  const { s, fo } = await emAndamento([{ tipo: 'Ação', reg: 'MOE-A003' }]);
+  await s.cancelar(s.acao('MOE-A003'), 'substituída');
+  await s.encerrarForum(fo);
+  const t = s.ataDoForum(fo);
+  assert.match(t, /\*1\. Ação MOE-A003\*\nAção MOE-A003 · Pendência: Conciliação bancária de setembro · responsável: Ana\n• Ação cancelada\. Motivo: substituída\./);
+  assert.match(t, /Foram|Um assunto em pauta, tratado\. Resultado: 1 ação cancelada\./);
 });
 
 test('cancelar só fórum agendado; ata só depois de encerrar', async () => {
@@ -253,7 +262,7 @@ test('convoca fórum com data que já passou e conduz normalmente', async () => 
   assert.equal(fo.situacao, 'Agendado');
   await s.iniciarForum(fo, ['MOE-ANA']);
   await s.encerrarForum(fo);
-  assert.match(s.ataDoForum(fo), /15\/10\/2026 às 09:30/);
+  assert.match(s.ataDoForum(fo), /15\/10\/2026, às 09:30/);
 });
 
 test('excluir leva fórum, pauta e deliberações para a lixeira; as ações ficam', async () => {
@@ -318,7 +327,7 @@ test('concluídas sem fórum: listagem, pauta já tratada, sem absorção pela d
   await s.encerrarForum(fo);
   assert.equal(it.trat, 'Concluído');
   assert.ok(!s.naoTratados('MOE').some(p => p.reg === 'MOE-A010'));
-  assert.match(s.ataDoForum(fo), /Ação MOE-A010 \| Concluída em 25\/10 \(Ana\)/);
+  assert.match(s.ataDoForum(fo), /• Ação concluída em 25\/10\/2026 por Ana, apresentada ao fórum\./);
 });
 
 test('incluir ação concluída durante o fórum com a demanda dela na pauta', async () => {

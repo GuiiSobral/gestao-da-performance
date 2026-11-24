@@ -454,3 +454,4 @@ tbody tr.marcada,tbody tr.marcada:hover{background:var(--accent-soft)}
 .tl .row-actions .btn.sm{border-color:transparent;background:none;height:26px;padding:0 6px;font-size:12px;color:var(--muted)}
 .tl .row-actions .btn.sm:hover{color:var(--accent);text-decoration:underline}
 .sub.and{overflow-wrap:anywhere}
+#ataTxt{min-height:min(520px,70vh)}

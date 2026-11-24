@@ -52,7 +52,14 @@ O fórum nasce de uma convocação e passa por **Agendado → Em andamento → R
 - **Iniciar fórum** registra a presença (convocados e quem participou sem ter sido convocado). Um fórum em andamento por cliente.
 - Durante o fórum, cada item tem os botões das ações (Concluir, Novo prazo e o detalhe), **+ Nova ação**, **Deliberação**, **Mantido sem mudança** e **Não tratado**; tópico livre tem anotação. O que é feito no item fica registrado nele (desdobramentos) e define o tratamento: Concluído, Repactuado, Cancelado, Encerrado, Mantido, Tratado ou Não tratado. Desfazer tira o desdobramento.
 - **+ Incluir na pauta** durante o fórum: registro existente, tópico livre ou registro novo criado na reunião.
-- **Encerrar fórum**: item sem tratamento vira Não tratado e vai para a pauta do próximo fórum. A ata sai dos desdobramentos de cada item (presentes, ausentes, pauta com o que foi feito e próximos passos), pode ser editada, copiada para o WhatsApp e salva no SharePoint.
+- **Encerrar fórum**: item sem tratamento vira Não tratado e vai para a pauta do próximo fórum.
+- **Ata** (desde 24/11/2026): sai dos desdobramentos de cada item, em seções:
+  - cabeçalho com data (dia da semana), horário, local, presentes e ausentes (Solve marcada);
+  - **Resumo**: quantos assuntos foram tratados ou adiados e o resultado em números (ações concluídas, prazos repactuados, ações novas, deliberações…);
+  - **Assuntos tratados**: cada item numerado, com tipo, código e responsável, e os desdobramentos em frases (sem repetir o texto quando o item é a própria ação);
+  - **Não tratados**, que voltam na próxima pauta;
+  - **Encaminhamentos**: as ações abertas criadas ou repactuadas no fórum, agrupadas por responsável, com prazo.
+- A ata pode ser editada, copiada para o WhatsApp, baixada em **PDF** ou **Word (.docx)** e salva no SharePoint. PDF e Word saem do texto da tela, com as edições (src/ata.js lê a marcação: `*MAIÚSCULAS*` = seção, `*1. …*` = assunto, `*Rótulo:*` = campo, `•` = tópico), com a faixa e as cores do guia Solve, rodapé com o código do fórum e paginação. Atas salvas no formato antigo também exportam; **Gerar de novo** refaz o texto no formato novo.
 - Fóruns gravados antes da convocação (sem situação) aparecem como realizados, com a ata que já tinham.
 
 ## Compromissos (`GP_Compromissos`)

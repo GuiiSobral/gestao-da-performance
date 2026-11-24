@@ -1059,43 +1059,86 @@ export class Store {
   }
 
   // ---------- ata ----------
-  linhaEvento(e) {
+  // Frase de um desdobramento. "propria": o item da pauta é a própria ação, então o texto dela não se repete.
+  linhaEvento(e, propria) {
     const q = e.resp ? ` (${this.nome(e.resp)})` : '';
+    const alvo = propria ? '' : `: ${e.txt}${q}`;
+    const ponto = t => (/[.!?…]$/.test(t.trim()) ? t.trim() : t.trim() + '.');
     switch (e.k) {
-      case 'concluida': return `Concluída: ${e.txt}${q}`;
-      case 'repactuada': return `Novo prazo ${fmtBR(e.prazo)}${e.de ? ` (era ${fmtBR(e.de)})` : ''}: ${e.txt}${q}. Motivo: ${e.mot}`;
-      case 'prazo': return `Prazo definido para ${fmtBR(e.prazo)}: ${e.txt}${q}`;
-      case 'cancelada': return `Cancelada: ${e.txt}. Motivo: ${e.mot}`;
-      case 'resp': return `Responsável passa a ser ${this.nome(e.resp)}: ${e.txt}`;
-      case 'nova': return `Nova ação: ${e.txt} (${this.nome(e.resp)}, até ${fmtBR(e.prazo)})`;
-      case 'encerrada': return 'Demanda encerrada';
-      case 'cancelDem': return 'Demanda cancelada';
-      case 'delib': return `${e.tipo || 'Deliberado'}: ${e.txt}${e.cod ? ` (ação ${e.cod}: ${this.nome(e.resp)}, até ${fmtBR(e.prazo)})` : q}`;
-      default: return e.txt || '';
+      case 'concluida': return ponto(`Ação concluída${alvo}`);
+      case 'repactuada': return ponto(`${e.de ? `Prazo repactuado de ${fmtBR(e.de, true)} para ${fmtBR(e.prazo, true)}` : `Prazo alterado para ${fmtBR(e.prazo, true)}`}${alvo}`) + (e.mot ? ` Motivo: ${ponto(e.mot)}` : '');
+      case 'prazo': return ponto(`Prazo definido para ${fmtBR(e.prazo, true)}${alvo}`);
+      case 'cancelada': return ponto(`Ação cancelada${propria ? '' : `: ${e.txt}`}`) + (e.mot ? ` Motivo: ${ponto(e.mot)}` : '');
+      case 'resp': return ponto(`Responsável alterado${e.de ? ` de ${this.nome(e.de)}` : ''} para ${this.nome(e.resp)}${propria ? '' : `: ${e.txt}`}`);
+      case 'nova': return ponto(`Nova ação: ${e.txt} (${this.nome(e.resp)}, até ${fmtBR(e.prazo, true)})`);
+      case 'encerrada': return 'Demanda encerrada pelo fórum.';
+      case 'cancelDem': return 'Demanda cancelada pelo fórum.';
+      case 'delib': return `${e.tipo || 'Deliberado'}: ${ponto(e.txt)}` + (e.cod ? ` Responsável: ${this.nome(e.resp)}, até ${fmtBR(e.prazo, true)}.` : e.resp ? ` Responsável: ${this.nome(e.resp)}.` : '');
+      default: return ponto(e.txt || '');
     }
   }
 
+  // Ata em texto, pronta para o WhatsApp (*negrito*) e para virar PDF e Word (ver src/ata.js).
+  // Seções em MAIÚSCULAS; cada assunto tratado tem título numerado, uma linha de identificação e os desdobramentos em tópicos.
   ataDoForum(fo) {
     const cli = this.cliente(fo.cli);
-    const L = [];
-    L.push(`*Fórum de Gestão | ${cli ? cli.nome : fo.cli} | ${fmtBR(fo.data, true)}${fo.hora ? ' às ' + fo.hora : ''}*`);
-    if (fo.local) L.push(`Local: ${fo.local}`);
-    const pres = fo.presentes.map(c => this.nome(c));
-    const aus = fo.convocados.filter(c => !fo.presentes.includes(c)).map(c => this.nome(c));
-    if (pres.length) L.push(`Presentes: ${pres.join(', ')}`);
-    if (aus.length) L.push(`Ausentes: ${aus.join(', ')}`);
-    L.push('', '*Pauta*');
+    const nomeP = c => { const p = this.pessoa(c); return this.nome(c) + (p && p.empresa === 'Solve' ? ' (Solve)' : ''); };
+    const ordemP = (a, b) => ((this.pessoa(a) || {}).empresa === 'Solve') - ((this.pessoa(b) || {}).empresa === 'Solve') || this.nome(a).localeCompare(this.nome(b));
+    const juntar = l => (l.length <= 1 ? l.join('') : `${l.slice(0, -1).join(', ')} e ${l[l.length - 1]}`);
+    const DIAS = ['domingo', 'segunda-feira', 'terça-feira', 'quarta-feira', 'quinta-feira', 'sexta-feira', 'sábado'];
+    const dia = fo.data ? DIAS[new Date(fo.data + 'T12:00:00').getDay()] + ', ' : '';
+    const L = ['*ATA DO FÓRUM DE GESTÃO*', `*${cli ? cli.nome : fo.cli}*`, ''];
+    L.push(`*Data:* ${dia}${fmtBR(fo.data, true)}${fo.hora ? `, às ${fo.hora}` : ''}`);
+    if (fo.local) L.push(`*Local:* ${fo.local}`);
+    const pres = [...fo.presentes].sort(ordemP).map(nomeP);
+    const aus = fo.convocados.filter(c => !fo.presentes.includes(c)).sort(ordemP).map(nomeP);
+    if (pres.length) L.push(`*Presentes:* ${juntar(pres)}`);
+    if (aus.length) L.push(`*Ausentes:* ${juntar(aus)}`);
+
     const itens = this.pautaDe(fo.id);
-    itens.forEach((p, k) => {
-      let trat = p.trat === 'Não tratado' ? 'Não tratado, volta na próxima pauta' : (p.trat || 'Sem tratamento');
-      // Ação que chegou ao fórum já concluída: a ata diz quando e por quem.
-      const ac = p.tipo === 'Ação' && p.trat === 'Concluído' && !p.eventos.length ? this.acao(p.reg) : null;
-      if (ac && ac.conclusao) trat = `Concluída em ${fmtBR(ac.conclusao)} (${this.nome(ac.resp)})`;
-      L.push(`${k + 1}. ${this.tituloItem(p)} | ${trat}`);
-      p.eventos.forEach(e => L.push(`   • ${this.linhaEvento(e)}`));
-      if (p.nota) L.push(`   • ${p.nota.replace(/\n+/g, ' ')}`);
-    });
-    // Próximos passos: as ações criadas, repactuadas ou com novo responsável neste fórum que seguem abertas.
+    const tratados = itens.filter(p => p.trat !== 'Não tratado'), adiados = itens.filter(p => p.trat === 'Não tratado');
+    // Ação que chegou ao fórum já concluída, sem nada feito nela na reunião.
+    const jaConcluida = p => (p.tipo === 'Ação' && p.trat === 'Concluído' && !p.eventos.some(e => e.k === 'concluida') ? this.acao(p.reg) : null);
+
+    // Resumo em uma frase com os números da reunião.
+    const ev = itens.flatMap(p => p.eventos);
+    const conta = k => ev.filter(e => k.includes(e.k)).length;
+    const nConc = conta(['concluida']) + tratados.filter(jaConcluida).length;
+    const res = [[nConc, 'ação concluída', 'ações concluídas'], [conta(['repactuada']), 'prazo repactuado', 'prazos repactuados'], [conta(['prazo']), 'prazo definido', 'prazos definidos'],
+      [conta(['nova']) + ev.filter(e => e.k === 'delib' && e.cod).length, 'ação nova', 'ações novas'], [conta(['cancelada']), 'ação cancelada', 'ações canceladas'],
+      [conta(['resp']), 'troca de responsável', 'trocas de responsável'], [conta(['encerrada', 'cancelDem']), 'demanda encerrada', 'demandas encerradas'],
+      [conta(['delib']), 'deliberação', 'deliberações']].filter(([n]) => n).map(([n, s1, s2]) => `${n} ${n === 1 ? s1 : s2}`);
+    const nIt = itens.length;
+    let resumo = !nIt ? 'Nenhum assunto em pauta.' : `${nIt === 1 ? 'Um assunto em pauta' : `Foram ${nIt} assuntos em pauta`}` +
+      (!adiados.length ? (nIt === 1 ? ', tratado.' : ', todos tratados.') : `: ${tratados.length} ${tratados.length === 1 ? 'tratado' : 'tratados'} e ${adiados.length} ${adiados.length === 1 ? 'adiado' : 'adiados'} para o próximo fórum.`);
+    if (res.length) resumo += ` Resultado: ${juntar(res)}.`;
+    L.push('', '*RESUMO*', resumo);
+
+    const ident = p => {
+      if (p.tipo === TOPICO) return `Tópico livre${p.resp ? ` · trazido por ${this.nome(p.resp)}` : ''}`;
+      if (p.tipo === 'Ação') { const a = this.acao(p.reg); const d = a && this.demanda(a.demanda);
+        return `Ação ${p.reg}${d ? ` · ${d.tipo}: ${d.titulo}` : ''}${a && a.resp ? ` · responsável: ${this.nome(a.resp)}` : ''}`; }
+      const d = this.demanda(p.reg);
+      return `${d ? d.tipo : 'Demanda'} ${p.reg}${d && d.resp ? ` · responsável: ${this.nome(d.resp)}` : ''}`;
+    };
+    if (tratados.length) {
+      L.push('', '*ASSUNTOS TRATADOS*');
+      tratados.forEach((p, k) => {
+        L.push('', `*${k + 1}. ${this.tituloItem(p)}*`, ident(p));
+        const linhas = p.eventos.map(e => this.linhaEvento(e, p.tipo === 'Ação' && e.cod === p.reg));
+        const ac = jaConcluida(p);
+        if (ac) linhas.unshift(`Ação concluída${ac.conclusao ? ` em ${fmtBR(ac.conclusao, true)}` : ''}${ac.resp ? ` por ${this.nome(ac.resp)}` : ''}, apresentada ao fórum.`);
+        if (p.nota) p.nota.split(/\n+/).map(x => x.trim()).filter(Boolean).forEach(x => linhas.push(x));
+        if (!linhas.length) linhas.push(p.trat === 'Mantido' ? 'Mantido sem mudanças.' : 'Discutido, sem encaminhamentos.');
+        linhas.forEach(x => L.push(`• ${x}`));
+      });
+    }
+    if (adiados.length) {
+      L.push('', '*NÃO TRATADOS (VOLTAM NA PRÓXIMA PAUTA)*');
+      adiados.forEach(p => L.push(`• ${this.tituloItem(p)}${p.reg ? ` (${p.reg})` : ''}`));
+    }
+
+    // Encaminhamentos: ações criadas, repactuadas ou com novo responsável neste fórum que seguem abertas, por responsável.
     const vistos = new Set(), passos = [];
     for (const p of itens) for (const e of p.eventos) {
       if (!['nova', 'repactuada', 'prazo', 'resp', 'delib'].includes(e.k) || !e.cod || vistos.has(e.cod)) continue;
@@ -1104,9 +1147,14 @@ export class Store {
       vistos.add(e.cod); passos.push(a);
     }
     if (passos.length) {
-      L.push('', '*Próximos passos*');
-      passos.sort((a, b) => (a.prazo || '9999').localeCompare(b.prazo || '9999'))
-        .forEach(a => L.push(`• ${a.acao} | *${this.nome(a.resp)}* | até ${fmtBR(a.prazo)}`));
+      L.push('', '*ENCAMINHAMENTOS*');
+      const porResp = new Map();
+      passos.forEach(a => { const k = a.resp || ''; if (!porResp.has(k)) porResp.set(k, []); porResp.get(k).push(a); });
+      [...porResp.keys()].sort((x, y) => this.nome(x).localeCompare(this.nome(y))).forEach(r => {
+        L.push('', `*${r ? this.nome(r) : 'Sem responsável'}*`);
+        porResp.get(r).sort((a, b) => (a.prazo || '9999').localeCompare(b.prazo || '9999'))
+          .forEach(a => L.push(`• ${a.acao.trim().replace(/[.;]$/, '')}${a.prazo ? `, até ${fmtBR(a.prazo, true)}` : ', sem prazo'}`));
+      });
     }
     return L.join('\n');
   }
